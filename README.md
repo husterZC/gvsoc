@@ -1,4 +1,4 @@
-# SoftHier Simulation Model in GVSoC
+# SoftHier Simulation Model in GVSoC -- Fork Version
 
 ## SoftHier Architecture Overview
 
