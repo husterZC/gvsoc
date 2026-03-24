@@ -144,6 +144,14 @@ core/models/memory/dramsys_configs:
 
 dramsys_preparation: build-systemc build-dramsys build-configs
 
+third_party/toolchain:
+	mkdir -p third_party/toolchain
+	cd third_party/toolchain && \
+	wget https://github.com/pulp-platform/pulp-riscv-gnu-toolchain/releases/download/v1.0.16/v1.0.16-pulp-riscv-gcc-centos-7.tar.bz2 &&\
+	tar -xvjf v1.0.16-pulp-riscv-gcc-centos-7.tar.bz2 &&\
+	wget https://github.com/husterZC/gun_toolchain/releases/download/v2.0.0/toolchain.tar.xz &&\
+	tar -xvf toolchain.tar.xz
+
 clean_dramsys_preparation:
 	rm -rf third_party
 
@@ -162,3 +170,11 @@ snitch_cluster.test:
 	cd snitch_cluster/target/snitch_cluster && GVSOC_TARGET=$(TARGETS) ./util/run.py sw/run.yaml --simulator gvsoc -j
 
 snitch_cluster: snitch_cluster.checkout snitch_cluster.build snitch_cluster.test
+
+
+
+##########################################################
+## 				Velocity Target			 				##
+##########################################################
+
+include velocity/velocity.mk

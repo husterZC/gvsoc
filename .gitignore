@@ -21,3 +21,6 @@ tests/snitch/
 tests/spatz-rtl/
 tests/magia-sdk/
 tests/riscv-tests/
+**velocity_arch.h
+**velocity_arch.inc
+sw_build

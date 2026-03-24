@@ -17,3 +17,11 @@ fi
 
 export PATH=$SDK_INSTALL/install/bin:$PATH
 export PYTHONPATH=$SDK_INSTALL/install/python:$PYTHONPATH
+
+
+if [ ! -d "third_party" ]; then
+    echo "Running toolchain preparation..."
+    make third_party/toolchain
+fi
+
+export PATH=$SDK_HOME/third_party/toolchain/install/bin:$PATH
