@@ -177,4 +177,11 @@ snitch_cluster: snitch_cluster.checkout snitch_cluster.build snitch_cluster.test
 ## 				Velocity Target			 				##
 ##########################################################
 
-include velocity/velocity.mk
+# include velocity/velocity.mk
+
+
+##########################################################
+## 				SoftHier Target			 				##
+##########################################################
+
+include softhier/softhier.mk

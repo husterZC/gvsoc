@@ -23,4 +23,6 @@ tests/magia-sdk/
 tests/riscv-tests/
 **velocity_arch.h
 **velocity_arch.inc
+**softhier_arch.h
+**softhier_arch.inc
 sw_build
