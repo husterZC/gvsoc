@@ -19,6 +19,8 @@
 #include <vp/vp.hpp>
 #include <vp/itf/io.hpp>
 #include <vp/itf/wire.hpp>
+#include <iostream>
+#include <string>
 
 
 using namespace std::placeholders;
@@ -42,6 +44,7 @@ private:
     int             nb_cores;
     uint32_t        cluster_id;
     vp::reg_32      barrier_status;
+    std::string     buffer;
 
     std::vector<vp::WireSlave<bool>> barrier_req_itf;
     vp::WireMaster<bool> barrier_ack_itf;
@@ -92,6 +95,17 @@ vp::IoReqStatus ClusterCSR::req(vp::Block *__this, vp::IoReq *req)
 
     if(offset == 8){
         data[0] = 0;
+    }
+
+    if(offset == 12){
+        uint32_t value = *(uint32_t *)data;
+        char c = (char)value;
+        if (c == '\n') {
+            std::cout << _this->buffer << std::endl;
+            _this->buffer.clear();
+        } else {
+            _this->buffer += c;
+        }
     }
 
     return vp::IO_REQ_OK;

@@ -27,6 +27,8 @@ import gvsoc.systree
 from pulp.chips.softhier.cluster_unit import ClusterUnit, ClusterArch
 from pulp.chips.softhier.softhier_ctrl import SoftHierCtrl
 from pulp.chips.softhier.softhier_arch import SoftHierArch
+from pulp.chips.softhier.error_detector import ErrorDetector
+from pulp.floonoc.floonoc import FlooNocClusterGridNarrowWide
 import math
 
 class SoftHierSystem(gvsoc.systree.Component):
@@ -46,6 +48,11 @@ class SoftHierSystem(gvsoc.systree.Component):
             [args, otherArgs] = parser.parse_known_args()
             binary = args.binary
 
+        #############
+        # Assertion #
+        #############
+        assert(arch.topology == '2DMesh', f'NoC Topology currectly only support 2DMesh')
+        assert(arch.num_cluster_x * arch.num_cluster_y == arch.num_cluster, f"Topology dimesion not match total number of clusters")
 
         ##############
         # Components #
@@ -76,27 +83,63 @@ class SoftHierSystem(gvsoc.systree.Component):
             pass
 
         #Virtual router, just for debugging and non-performance-critical jobs
-        narrow_interco = router.Router(self, 'narrow_interco', bandwidth=8)
+        virtual_interco = router.Router(self, 'virtual_interco', bandwidth=8)
 
         #Debug Memory
-        debug_mem = memory.memory.Memory(self,'debug_mem', size=1)
+        error_detector = ErrorDetector(self,'error_detector')
 
         #Control register
-        softhier_ctrl = SoftHierCtrl(self, 'softhier_ctrl', num_cluster=arch.num_cluster)
+        softhier_ctrl = SoftHierCtrl(self, 'softhier_ctrl', num_cluster=arch.num_cluster, num_core_per_cluster=arch.num_core_per_cluster)
+
+        #FlooNoC
+        noc = FlooNocClusterGridNarrowWide(self, 'noc', 
+                wide_width=arch.noc_link_width,
+                narrow_width=8,
+                nb_x_clusters=arch.num_cluster_x,
+                nb_y_clusters=arch.num_cluster_y,
+                router_input_queue_size=16,
+                ni_outstanding_reqs=arch.noc_outstanding)
 
         ############
         # Bindings #
         ############
 
         #Debug memory
-        narrow_interco.o_MAP(debug_mem.i_INPUT())
+        virtual_interco.o_MAP(error_detector.i_INPUT())
 
         #Control register
-        narrow_interco.o_MAP(softhier_ctrl.i_INPUT(), base=arch.soc_register_base, size=arch.soc_register_size, rm_base=True)
+        virtual_interco.o_MAP(softhier_ctrl.i_INPUT(), base=arch.soc_register_base, size=arch.soc_register_size, rm_base=True)
 
         #Clusters
         for cluster_id in range(arch.num_cluster):
-            cluster_list[cluster_id].o_NARROW_SOC(narrow_interco.i_INPUT())
+            x_id = int(cluster_id % arch.num_cluster_x)
+            y_id = int(cluster_id / arch.num_cluster_x)
+            narrow_arbiter = router.Router(self, f'narrow_arbiter_{cluster_id}', bandwidth=8)
+            narrow_arbiter.o_MAP(virtual_interco.i_INPUT())
+            narrow_arbiter.o_MAP(noc.i_CLUSTER_NARROW_INPUT(x_id, y_id),
+                                 base=arch.cluster_tcdm_remote,
+                                 size=arch.num_cluster * arch.cluster_tcdm_size,
+                                 rm_base=False)
+            wide_arbiter = router.Router(self, f'wide_arbiter_{cluster_id}', bandwidth=arch.noc_link_width)
+            wide_arbiter.o_MAP(virtual_interco.i_INPUT())
+            wide_arbiter.o_MAP(noc.i_CLUSTER_WIDE_INPUT(x_id, y_id),
+                                 base=arch.cluster_tcdm_remote,
+                                 size=arch.num_cluster * arch.cluster_tcdm_size,
+                                 rm_base=False)
+            cluster_list[cluster_id].o_NARROW_SOC(narrow_arbiter.i_INPUT())
+            cluster_list[cluster_id].o_WIDE_SOC(wide_arbiter.i_INPUT())
+            noc.o_NARROW_MAP(cluster_list[cluster_id].i_NARROW_INPUT(),
+                           base=arch.cluster_tcdm_remote  + cluster_id * arch.cluster_tcdm_size,
+                           size=arch.cluster_tcdm_size,
+                           x=x_id+1,
+                           y=y_id+1,
+                           rm_base=True)
+            noc.o_WIDE_MAP(cluster_list[cluster_id].i_WIDE_INPUT(),
+                           base=arch.cluster_tcdm_remote  + cluster_id * arch.cluster_tcdm_size,
+                           size=arch.cluster_tcdm_size,
+                           x=x_id+1,
+                           y=y_id+1,
+                           rm_base=True)
             pass
 
 

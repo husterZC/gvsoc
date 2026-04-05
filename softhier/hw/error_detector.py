@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2024 ETH Zurich and University of Bologna
+# Copyright (C) 2020 GreenWaves Technologies, SAS, ETH Zurich and University of Bologna
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,18 +16,12 @@
 
 import gvsoc.systree
 
-class SoftHierCtrl(gvsoc.systree.Component):
+class ErrorDetector(gvsoc.systree.Component):
 
-    def __init__(self, parent: gvsoc.systree.Component, name: str, num_cluster: int, num_core_per_cluster: int):
+    def __init__(self, parent, name):
+        super(ErrorDetector, self).__init__(parent, name)
 
-        super().__init__(parent, name)
-
-        self.add_sources(['pulp/chips/softhier/softhier_ctrl.cpp'])
-
-        self.add_properties({
-            'num_cluster': num_cluster,
-            'num_core_per_cluster': num_core_per_cluster,
-        })
+        self.add_sources(['pulp/chips/softhier/error_detector.cpp'])
 
     def i_INPUT(self) -> gvsoc.systree.SlaveItf:
         return gvsoc.systree.SlaveItf(self, 'input', signature='io')

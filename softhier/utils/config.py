@@ -45,6 +45,8 @@ with open(S_header_file, 'w') as file:
     file.write('#define SOFTHIERARCH_H\n\n')
     
     for attr_name, attr_value in attributes.items():
+        if attr_name == 'topology':
+            continue
         # Convert attribute name to uppercase and prefix with 'ARCH_'
         define_name = f'ARCH_{attr_name.upper()}'
         file.write(f'.set {define_name}, {attr_value}\n')

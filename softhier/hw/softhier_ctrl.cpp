@@ -57,6 +57,7 @@ private:
     vp::Trace               trace;
     vp::IoSlave             input_itf;
     uint32_t                num_cluster;
+    uint32_t                num_core_per_cluster;
     int64_t                 timer_start;
     int64_t                 all_eoc_conuter;
 };
@@ -67,6 +68,7 @@ SoftHierCtrl::SoftHierCtrl(vp::ComponentConf &config)
     : vp::Component(config)
 {
     this->num_cluster = this->get_js_config()->get("num_cluster")->get_int();
+    this->num_core_per_cluster = this->get_js_config()->get("num_core_per_cluster")->get_int();
 
     this->traces.new_trace("trace", &this->trace, vp::DEBUG);
     this->input_itf.set_req_meth(&SoftHierCtrl::req);
@@ -104,11 +106,13 @@ vp::IoReqStatus SoftHierCtrl::req(vp::Block *__this, vp::IoReq *req)
         {
             _this->all_eoc_conuter += 1;
             // _this->trace.msg("Control registers access (offset: 0x%x, size: 0x%x, is_write: %d, data:%x)\n", offset, size, is_write, *(uint32_t *)data);
-            printProgressBar(_this->all_eoc_conuter, _this->num_cluster);
-            if (_this->all_eoc_conuter >= _this->num_cluster)
+            // printProgressBar(_this->all_eoc_conuter, _this->num_cluster);
+            if (_this->all_eoc_conuter >= (_this->num_cluster * _this->num_core_per_cluster))
             {
                 _this->time.get_engine()->quit(0);
             }
+
+            return vp::IO_REQ_PENDING;
         }
         if (offset == 8)
         {

@@ -48,3 +48,11 @@ run:
 rund:
 	./install/bin/gvsoc --target=pulp.chips.softhier.softhier_target --binary sw_build/softhier.elf run --trace-level=6 --trace=insn
 
+runi:
+	./install/bin/gvsoc --target=pulp.chips.softhier.softhier_target --binary sw_build/softhier.elf run --trace-level=6 --trace=/system/cluster_0/core_2/insn
+
+runn:
+	./install/bin/gvsoc --target=pulp.chips.softhier.softhier_target --binary sw_build/softhier.elf run --trace-level=6 --trace=/system/noc
+
+runm:
+	./install/bin/gvsoc --target=pulp.chips.softhier.softhier_target --binary sw_build/softhier.elf run --trace-level=6 --trace=idma
