@@ -149,7 +149,7 @@ class ClusterUnit(gvsoc.systree.Component):
         stack_mem = memory.Memory(self, 'stack_mem', size=arch.stack_size)
 
         # Core interco
-        core_ico = router.Router(self, f'core_ico', bandwidth=arch.lane_width)
+        core_ico = router.Router(self, f'core_ico', bandwidth=8)
 
 
         #

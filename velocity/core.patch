@@ -1,0 +1,273 @@
+diff --git a/models/cpu/iss/flexfloat/flexfloat.c b/models/cpu/iss/flexfloat/flexfloat.c
+index 1d7900e6..deaee1d5 100644
+--- a/models/cpu/iss/flexfloat/flexfloat.c
++++ b/models/cpu/iss/flexfloat/flexfloat.c
+@@ -537,6 +537,23 @@ INLINE void ff_add(flexfloat_t *dest, const flexfloat_t *a, const flexfloat_t *b
+     #endif
+ }
+ 
++
++#include <math.h>
++
++INLINE void ff_exp(flexfloat_t *dest, const flexfloat_t *a, const flexfloat_t *b) {
++    assert((dest->desc.exp_bits == a->desc.exp_bits) && (dest->desc.frac_bits == a->desc.frac_bits) &&
++           (a->desc.exp_bits == b->desc.exp_bits) && (a->desc.frac_bits == b->desc.frac_bits));
++    dest->value = (fp_t)exp((double)a->value);
++    #ifdef FLEXFLOAT_TRACKING
++    dest->exact_value = (fp_t)exp((double)a->exact_value);
++    if(dest->tracking_fn) (dest->tracking_fn)(dest, dest->tracking_arg);
++    #endif
++    flexfloat_sanitize(dest);
++    #ifdef FLEXFLOAT_STATS
++    if(StatsEnabled) getOpStats(dest->desc)->add += 1;
++    #endif
++}
++
+ INLINE void ff_sub(flexfloat_t *dest, const flexfloat_t *a, const flexfloat_t *b) {
+     assert((dest->desc.exp_bits == a->desc.exp_bits) && (dest->desc.frac_bits == a->desc.frac_bits) &&
+            (a->desc.exp_bits == b->desc.exp_bits) && (a->desc.frac_bits == b->desc.frac_bits));
+diff --git a/models/cpu/iss/flexfloat/flexfloat.h b/models/cpu/iss/flexfloat/flexfloat.h
+index e7791f10..4f4ca654 100644
+--- a/models/cpu/iss/flexfloat/flexfloat.h
++++ b/models/cpu/iss/flexfloat/flexfloat.h
+@@ -231,6 +231,7 @@ long double ff_get_longdouble(const flexfloat_t *obj);
+ 
+ void ff_inverse(flexfloat_t *dest, const flexfloat_t *a);
+ void ff_add(flexfloat_t *dest, const flexfloat_t *a, const flexfloat_t *b);
++void ff_exp(flexfloat_t *dest, const flexfloat_t *a, const flexfloat_t *b);
+ void ff_sub(flexfloat_t *dest, const flexfloat_t *a, const flexfloat_t *b);
+ void ff_mul(flexfloat_t *dest, const flexfloat_t *a, const flexfloat_t *b);
+ void ff_div(flexfloat_t *dest, const flexfloat_t *a, const flexfloat_t *b);
+diff --git a/models/cpu/iss/include/isa/rv32v.hpp b/models/cpu/iss/include/isa/rv32v.hpp
+index 188f2877..c2d33c1d 100644
+--- a/models/cpu/iss/include/isa/rv32v.hpp
++++ b/models/cpu/iss/include/isa/rv32v.hpp
+@@ -696,6 +696,16 @@ static inline iss_reg_t vfadd_vf_exec(Iss *iss, iss_insn_t *insn, iss_reg_t pc){
+     return iss_insn_next(iss, insn, pc);
+ }
+ 
++static inline iss_reg_t vfexp_vv_exec(Iss *iss, iss_insn_t *insn, iss_reg_t pc){
++    LIB_CALL4(lib_FEXPVV , REG_IN(0), REG_IN(1) , REG_OUT(0), UIM_GET(0));
++    return iss_insn_next(iss, insn, pc);
++}
++
++static inline iss_reg_t vfexp_vf_exec(Iss *iss, iss_insn_t *insn, iss_reg_t pc){
++    LIB_CALL4(lib_FEXPVF , REG_IN(1), FREG_GET(0), REG_OUT(0), UIM_GET(0));
++    return iss_insn_next(iss, insn, pc);
++}
++
+ static inline iss_reg_t vfsub_vv_exec(Iss *iss, iss_insn_t *insn, iss_reg_t pc){
+     LIB_CALL4(lib_FSUBVV , REG_IN(0), REG_IN(1) , REG_OUT(0), UIM_GET(0));
+     return iss_insn_next(iss, insn, pc);
+diff --git a/models/cpu/iss/include/isa/rv32v_timed.hpp b/models/cpu/iss/include/isa/rv32v_timed.hpp
+index 0484774c..6d588802 100644
+--- a/models/cpu/iss/include/isa/rv32v_timed.hpp
++++ b/models/cpu/iss/include/isa/rv32v_timed.hpp
+@@ -1198,6 +1198,41 @@ static inline iss_reg_t vfadd_vv_exec(Iss *iss, iss_insn_t *insn, iss_reg_t pc)
+     return iss_insn_next(iss, insn, pc);
+ }
+ 
++static inline iss_reg_t vfexp_vf_exec(Iss *iss, iss_insn_t *insn, iss_reg_t pc)
++{
++    unsigned int sewb = iss->vector.sewb;
++    unsigned int lmul = iss->vector.lmul;
++    uint64_t in0 = RVV_FREG_GET(0);
++    for (unsigned int i=iss->csr.vstart.value; i<iss->csr.vl.value; i++)
++    {
++        if (velem_is_active(iss, i, UIM_GET(0)))
++        {
++            uint64_t in1 = velem_get_value(iss, REG_IN(1), i, sewb, lmul);
++            uint64_t res = LIB_FF_CALL3(lib_flexfloat_exp_round, in0, in1, iss->vector.exp, iss->vector.mant, 7);
++
++            velem_set_value(iss, REG_OUT(0), i, sewb, res);
++        }
++    }
++    return iss_insn_next(iss, insn, pc);
++}
++
++static inline iss_reg_t vfexp_vv_exec(Iss *iss, iss_insn_t *insn, iss_reg_t pc)
++{
++    unsigned int sewb = iss->vector.sewb;
++    unsigned int lmul = iss->vector.lmul;
++    for (unsigned int i=iss->csr.vstart.value; i<iss->csr.vl.value; i++)
++    {
++        if (velem_is_active(iss, i, UIM_GET(0)))
++        {
++            uint64_t in0 = velem_get_value(iss, REG_IN(0), i, sewb, lmul);
++            uint64_t in1 = velem_get_value(iss, REG_IN(1), i, sewb, lmul);
++            uint64_t res = LIB_FF_CALL3(lib_flexfloat_exp_round, in0, in1, iss->vector.exp, iss->vector.mant, 7);
++            velem_set_value(iss, REG_OUT(0), i, sewb, res);
++        }
++    }
++    return iss_insn_next(iss, insn, pc);
++}
++
+ static inline iss_reg_t vfsub_vf_exec(Iss *iss, iss_insn_t *insn, iss_reg_t pc)
+ {
+     unsigned int sewb = iss->vector.sewb;
+diff --git a/models/cpu/iss/include/isa_lib/int.h b/models/cpu/iss/include/isa_lib/int.h
+index c7d14419..49e713b1 100644
+--- a/models/cpu/iss/include/isa_lib/int.h
++++ b/models/cpu/iss/include/isa_lib/int.h
+@@ -1616,6 +1616,11 @@ static inline unsigned long int lib_flexfloat_add(Iss *s, unsigned long int a, u
+     FF_EXEC_2(s, ff_add, a, b, e, m)
+ }
+ 
++static inline unsigned long int lib_flexfloat_exp(Iss *s, unsigned long int a, unsigned long int b, uint8_t e, uint8_t m)
++{
++    FF_EXEC_2(s, ff_exp, a, b, e, m)
++}
++
+ static inline unsigned long int lib_flexfloat_sub(Iss *s, unsigned long int a, unsigned long int b, uint8_t e, uint8_t m)
+ {
+     FF_EXEC_2(s, ff_sub, a, b, e, m)
+@@ -1790,6 +1795,14 @@ static inline unsigned long int lib_flexfloat_add_round(Iss *s, unsigned long in
+     return result;
+ }
+ 
++static inline unsigned long int lib_flexfloat_exp_round(Iss *s, unsigned long int a, unsigned long int b, uint8_t e, uint8_t m, unsigned long int round)
++{
++    int old = setFFRoundingMode(s, round);
++    unsigned long int result = lib_flexfloat_exp(s, a, b, e, m);
++    restoreFFRoundingMode(old);
++    return result;
++}
++
+ static inline unsigned long int lib_flexfloat_sub_round(Iss *s, unsigned long int a, unsigned long int b, uint8_t e, uint8_t m, unsigned long int round)
+ {
+     int old = setFFRoundingMode(s, round);
+diff --git a/models/cpu/iss/include/isa_lib/vint.h b/models/cpu/iss/include/isa_lib/vint.h
+index 26cb748e..7fb0e4fb 100644
+--- a/models/cpu/iss/include/isa_lib/vint.h
++++ b/models/cpu/iss/include/isa_lib/vint.h
+@@ -138,7 +138,9 @@ static inline int  sewCase(int sew){ //sew/8
+ static inline void EMCase(int sew, uint8_t *m, uint8_t *e){
+     switch (sew){
+     case 8:{
+-        printf("8 bit is not supported for FLOAT\n");
++        // printf("8 bit is not supported for FLOAT\n");
++        *e = 5;
++        *m = 2;
+         return;
+         break;
+     }
+@@ -3393,6 +3395,56 @@ static inline void lib_FADDVV   (Iss *iss, int vs1,     int vs2, int vd, bool vm
+     }
+ }
+ 
++static inline void lib_FEXPVV   (Iss *iss, int vs1,     int vs2, int vd, bool vm){
++    bool bin[8];
++    unsigned long int res, data1, data2;
++    uint8_t e, m;
++    bool resBin[64];
++
++    for (int i = VSTART; i < VL; i++){
++        if(!(i%8)){
++            intToBin(8,(int64_t) iss->spatz.vregfile.vregs[0][i/8],bin);
++        }
++        
++        myAbsU(iss, SEW, vs1, i, &data1);
++        myAbsU(iss, SEW, vs2, i, &data2);
++        EMCase(SEW, &m, &e);
++
++        if(!mask(vm,bin)){
++        int old = setFFRoundingMode(iss, iss->csr.fcsr.frm);
++        FLOAT_EXEC_2(ff_exp, data1, data2, e, m, res);
++        restoreFFRoundingMode(old);
++        intToBinU(SEW, res, resBin);
++        writeToVReg(iss, SEW, vd, i, resBin);
++        }
++    }
++}
++
++static inline void lib_FEXPVF   (Iss *iss, int vs2, int64_t rs1, int vd, bool vm){
++    bool bin[8];
++    unsigned long int res, data1, data2;
++    uint8_t e, m;
++    bool resBin[64];
++    data1 = rs1;
++    for (int i = VSTART; i < VL; i++){
++        if(!(i%8)){
++            intToBin(8,(int64_t) iss->spatz.vregfile.vregs[0][i/8],bin);
++        }
++        
++        myAbsU(iss, SEW, vs2, i, &data2);
++        EMCase(SEW, &m, &e);
++
++        if(!mask(vm,bin)){
++            int old = setFFRoundingMode(iss, iss->csr.fcsr.frm);
++            FLOAT_EXEC_2(ff_exp, data1, data2, e, m, res);
++            restoreFFRoundingMode(old);
++            intToBinU(SEW, res, resBin);
++            writeToVReg(iss, SEW, vd, i, resBin);
++
++        }        
++    }
++}
++
+ static inline void lib_FADDVF   (Iss *iss, int vs2, int64_t rs1, int vd, bool vm){
+     bool bin[8];
+     unsigned long int res, data1, data2;
+diff --git a/models/cpu/iss/include/spatz.hpp b/models/cpu/iss/include/spatz.hpp
+index 8b348cd0..fe7e5551 100644
+--- a/models/cpu/iss/include/spatz.hpp
++++ b/models/cpu/iss/include/spatz.hpp
+@@ -29,9 +29,9 @@ typedef uint8_t iss_Vel_t;
+ #define ISS_NB_VREGS 32
+ //#define NB_VEL VLEN/SEW
+ //#define NB_VEL 256/8
+-#define NB_VEL 2048/8//???????????????????????
++#define NB_VEL 16384/8//???????????????????????
+ //#define VLMAX NB_VEL*iss->spatz.LMUL
+-#define VLMAX (int)((2048*LMUL)/SEW)
++#define VLMAX (int)((16384*LMUL)/SEW)
+ 
+ #define XLEN = ISS_REG_WIDTH
+ #define FLEN = ISS_REG_WIDTH
+diff --git a/models/cpu/iss/isa_gen/isa_rvv.py b/models/cpu/iss/isa_gen/isa_rvv.py
+index 3c39da9e..ffc4fb4b 100644
+--- a/models/cpu/iss/isa_gen/isa_rvv.py
++++ b/models/cpu/iss/isa_gen/isa_rvv.py
+@@ -204,6 +204,9 @@ class Rv32v(IsaSubset):
+             Instr('vfadd.vv'      ,   Format_OPV  ,    '000000 - ----- ----- 001 ----- 1010111', tags=['fp_op']),
+             Instr('vfadd.vf'      ,   Format_OPVF ,    '000000 - ----- ----- 101 ----- 1010111', tags=['fp_op']),
+ 
++            Instr('vfexp.vv'      ,   Format_OPV  ,    '001100 - ----- ----- 001 ----- 1010111', tags=['fp_op']),
++            Instr('vfexp.vf'      ,   Format_OPVF ,    '001100 - ----- ----- 101 ----- 1010111', tags=['fp_op']),
++
+             Instr('vfsub.vv'      ,   Format_OPV  ,    '000010 - ----- ----- 001 ----- 1010111', tags=['fp_op']),
+             Instr('vfsub.vf'      ,   Format_OPVF ,    '000010 - ----- ----- 101 ----- 1010111', tags=['fp_op']),
+ 
+diff --git a/models/cpu/iss/isa_gen/isa_rvv_timed.py b/models/cpu/iss/isa_gen/isa_rvv_timed.py
+index 6f18f94f..4565dd7e 100644
+--- a/models/cpu/iss/isa_gen/isa_rvv_timed.py
++++ b/models/cpu/iss/isa_gen/isa_rvv_timed.py
+@@ -414,6 +414,9 @@ class Rv32v(IsaSubset):
+             Instr('vfadd.vv'      ,   Format_OPV_7  ,    '000000 - ----- ----- 001 ----- 1010111', tags=['fp_op']),
+             Instr('vfadd.vf'      ,   Format_OPV_8 ,    '000000 - ----- ----- 101 ----- 1010111', tags=['fp_op']),
+ 
++            Instr('vfexp.vv'      ,   Format_OPV_7  ,    '001100 - ----- ----- 001 ----- 1010111', tags=['fp_op']),
++            Instr('vfexp.vf'      ,   Format_OPV_8 ,    '001100 - ----- ----- 101 ----- 1010111', tags=['fp_op']),
++
+             Instr('vfsub.vv'      ,   Format_OPV_7  ,    '000010 - ----- ----- 001 ----- 1010111', tags=['fp_op']),
+             Instr('vfsub.vf'      ,   Format_OPV_8 ,    '000010 - ----- ----- 101 ----- 1010111', tags=['fp_op']),
+ 
+diff --git a/models/cpu/iss/src/ara/ara_vcompute.cpp b/models/cpu/iss/src/ara/ara_vcompute.cpp
+index 94f5a27a..5fcadd03 100644
+--- a/models/cpu/iss/src/ara/ara_vcompute.cpp
++++ b/models/cpu/iss/src/ara/ara_vcompute.cpp
+@@ -122,6 +122,14 @@ void AraVcompute::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
+             _this->ara.nb_lanes;
+         int64_t end_cyclestamp = _this->ara.iss.top.clock.get_cycles() +
+             nb_elems * _this->ara.iss.vector.sewb / _this->width + _this->pending_insn->insn->latency;
++        
++        bool is_reduction = strstr(_this->pending_insn->insn->decoder_item->u.insn.label, "vfred");
++        if (is_reduction)
++        {
++            unsigned int x = _this->ara.nb_lanes * _this->width / _this->ara.iss.vector.sewb;
++            end_cyclestamp += x <= 1 ? 0 : 32 - __builtin_clz(x - 1);
++        }
++        
+ 
+         // Only assign the end timestamp if the instruction is not chained
+         if (!_this->pending_insn->chained)
