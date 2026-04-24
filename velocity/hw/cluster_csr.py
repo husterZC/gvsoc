@@ -18,13 +18,13 @@ import gvsoc.systree
 
 class ClusterCSR(gvsoc.systree.Component):
 
-    def __init__(self, parent, name, bus_granularity=64):
+    def __init__(self, parent, name, port_granularity=64):
         super(ClusterCSR, self).__init__(parent, name)
 
         self.add_sources(['pulp/chips/velocity/cluster_csr.cpp'])
 
         self.add_properties({
-            'bus_granularity': bus_granularity,
+            'port_granularity': port_granularity,
         })
 
     def i_INPUT(self) -> gvsoc.systree.SlaveItf:
@@ -33,11 +33,11 @@ class ClusterCSR(gvsoc.systree.Component):
     def o_TCDM(self, itf: gvsoc.systree.SlaveItf):
         self.itf_bind(f'tcdm', itf, signature='io')
 
-    def o_BUS_OUTPUT(self, itf: gvsoc.systree.SlaveItf):
-        self.itf_bind(f'bus_output', itf, signature='io')
-    
-    def i_BUS_INPUT(self) -> gvsoc.systree.SlaveItf:
-        return gvsoc.systree.SlaveItf(self, 'bus_input', signature='io')
+    def i_PORT_INPUT(self, i: int) -> gvsoc.systree.SlaveItf:
+        return gvsoc.systree.SlaveItf(self, f'port_in_{i}', signature='io')
+
+    def o_PORT_OUT(self, itf: gvsoc.systree.SlaveItf, i: int):
+        self.itf_bind(f'port_out_{i}', itf, signature='io')
 
     def i_LOCK_REQ(self) -> gvsoc.systree.SlaveItf:
         return gvsoc.systree.SlaveItf(self, f'lock_req', signature='wire<bool>')
