@@ -117,10 +117,19 @@ private:
         vp::IoReq req;
     };
 
+    struct PendingRemoteWrite
+    {
+        Txn *txn;
+        vp::IoReq *req;
+        vp::ClockEvent *event;
+    };
+
     static vp::IoReqStatus regs_req(vp::Block *__this, vp::IoReq *req);
     static vp::IoReqStatus remote_req(vp::Block *__this, vp::IoReq *req);
     static void remote_grant(vp::Block *__this, vp::IoReq *req);
     static void remote_resp(vp::Block *__this, vp::IoReq *req);
+    static void send_packet_event(vp::Block *__this, vp::ClockEvent *event);
+    static void remote_write_event(vp::Block *__this, vp::ClockEvent *event);
     static void complete_event(vp::Block *__this, vp::ClockEvent *event);
 
     uint32_t allocate_txn_id();
@@ -131,7 +140,9 @@ private:
         uint32_t local_offset, uint32_t remote_offset, uint32_t payload_size, uint8_t *payload,
         uint64_t completion_latency);
     bool send_packet(std::unique_ptr<OutgoingPacket> packet);
+    bool schedule_packet_send(std::unique_ptr<OutgoingPacket> packet, uint64_t cycles);
     void complete_packet(OutgoingPacket *packet, vp::IoReqStatus status, bool synchronous);
+    void schedule_remote_write_response(Txn *txn, vp::IoReq *req, uint64_t cycles);
     bool submit_remote_write(Txn *txn, uint64_t latency);
     bool submit_remote_read_req(Txn *txn, uint64_t latency);
     bool submit_remote_read_resp(uint32_t dst_cluster, uint32_t txn_id, uint32_t local_offset,
@@ -174,6 +185,8 @@ private:
     std::deque<Txn *> ready;
     std::unordered_map<uint32_t, std::unique_ptr<Txn>> txns;
     std::unordered_map<vp::IoReq *, std::unique_ptr<OutgoingPacket>> remote_pending;
+    std::unordered_map<OutgoingPacket *, std::unique_ptr<OutgoingPacket>> delayed_packets;
+    std::unordered_map<PendingRemoteWrite *, std::unique_ptr<PendingRemoteWrite>> pending_remote_writes;
 };
 
 VelocityDma::VelocityDma(vp::ComponentConf &config)
@@ -366,6 +379,22 @@ bool VelocityDma::send_packet(std::unique_ptr<OutgoingPacket> packet)
     return false;
 }
 
+bool VelocityDma::schedule_packet_send(std::unique_ptr<OutgoingPacket> packet, uint64_t cycles)
+{
+    if (cycles == 0)
+    {
+        return this->send_packet(std::move(packet));
+    }
+
+    OutgoingPacket *raw = packet.get();
+    vp::ClockEvent *event = this->event_new(VelocityDma::send_packet_event);
+    event->get_args()[0] = raw;
+    this->delayed_packets[raw] = std::move(packet);
+    event->enqueue(cycles);
+
+    return true;
+}
+
 void VelocityDma::complete_packet(OutgoingPacket *packet, vp::IoReqStatus status, bool synchronous)
 {
     auto it = this->remote_pending.find(&packet->req);
@@ -402,12 +431,27 @@ void VelocityDma::complete_packet(OutgoingPacket *packet, vp::IoReqStatus status
     }
 }
 
+void VelocityDma::schedule_remote_write_response(Txn *txn, vp::IoReq *req, uint64_t cycles)
+{
+    std::unique_ptr<PendingRemoteWrite> pending(new PendingRemoteWrite());
+    PendingRemoteWrite *raw = pending.get();
+
+    pending->txn = txn;
+    pending->req = req;
+    pending->event = this->event_new(VelocityDma::remote_write_event);
+    pending->event->get_args()[0] = raw;
+
+    cycles = std::max<uint64_t>(cycles + this->base_latency, 1);
+    this->pending_remote_writes[raw] = std::move(pending);
+    raw->event->enqueue(cycles);
+}
+
 bool VelocityDma::submit_remote_write(Txn *txn, uint64_t latency)
 {
     std::unique_ptr<OutgoingPacket> packet = this->build_packet(txn, txn->remote_cluster,
         REMOTE_PHASE_WRITE, txn->local_offset, txn->remote_offset, txn->size, txn->buffer.data(),
-        latency);
-    return this->send_packet(std::move(packet));
+        0);
+    return this->schedule_packet_send(std::move(packet), latency);
 }
 
 bool VelocityDma::submit_remote_read_req(Txn *txn, uint64_t latency)
@@ -426,7 +470,7 @@ bool VelocityDma::submit_remote_read_resp(uint32_t dst_cluster, uint32_t txn_id,
     RemoteHeader *header = (RemoteHeader *)packet->data.data();
     header->txn_id = txn_id;
 
-    return this->send_packet(std::move(packet));
+    return this->schedule_packet_send(std::move(packet), latency);
 }
 
 void VelocityDma::finish_txn(Txn *txn, uint32_t status, uint32_t error)
@@ -641,8 +685,14 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
             vp::IoReq tcdm_req(header.remote_offset, req->get_data() + sizeof(RemoteHeader),
                 header.payload_size, true);
             vp::IoReqStatus status = _this->tcdm_itf.req(&tcdm_req);
-            req->inc_latency(tcdm_req.get_full_latency() + _this->base_latency);
-            return status;
+            if (status != vp::IO_REQ_OK)
+            {
+                _this->last_error = DMA_ERROR_LOCAL_ACCESS;
+                return vp::IO_REQ_INVALID;
+            }
+
+            _this->schedule_remote_write_response(NULL, req, tcdm_req.get_full_latency());
+            return vp::IO_REQ_PENDING;
         }
 
         case REMOTE_PHASE_READ_REQ:
@@ -668,7 +718,8 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
 
             req->inc_latency(latency + _this->base_latency);
             if (!_this->submit_remote_read_resp(header.src_cluster, header.txn_id,
-                header.remote_offset, header.local_offset, header.payload_size, buffer.data(), 0))
+                header.remote_offset, header.local_offset, header.payload_size, buffer.data(),
+                latency + _this->base_latency))
             {
                 return vp::IO_REQ_INVALID;
             }
@@ -701,9 +752,8 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
                 return vp::IO_REQ_INVALID;
             }
 
-            req->inc_latency(latency + _this->base_latency);
-            _this->schedule_completion(txn, latency);
-            return vp::IO_REQ_OK;
+            _this->schedule_remote_write_response(txn, req, latency);
+            return vp::IO_REQ_PENDING;
         }
 
         default:
@@ -732,6 +782,45 @@ void VelocityDma::remote_resp(vp::Block *__this, vp::IoReq *req)
     }
 
     _this->complete_packet(it->second.get(), req->status, false);
+}
+
+void VelocityDma::send_packet_event(vp::Block *__this, vp::ClockEvent *event)
+{
+    VelocityDma *_this = (VelocityDma *)__this;
+    OutgoingPacket *packet = (OutgoingPacket *)event->get_args()[0];
+    auto it = _this->delayed_packets.find(packet);
+    if (it == _this->delayed_packets.end())
+    {
+        _this->last_error = DMA_ERROR_REMOTE_ACCESS;
+        return;
+    }
+
+    std::unique_ptr<OutgoingPacket> holder = std::move(it->second);
+    _this->delayed_packets.erase(it);
+    _this->send_packet(std::move(holder));
+}
+
+void VelocityDma::remote_write_event(vp::Block *__this, vp::ClockEvent *event)
+{
+    VelocityDma *_this = (VelocityDma *)__this;
+    PendingRemoteWrite *pending = (PendingRemoteWrite *)event->get_args()[0];
+    auto it = _this->pending_remote_writes.find(pending);
+    if (it == _this->pending_remote_writes.end())
+    {
+        _this->last_error = DMA_ERROR_REMOTE_ACCESS;
+        return;
+    }
+
+    std::unique_ptr<PendingRemoteWrite> holder = std::move(it->second);
+    _this->pending_remote_writes.erase(it);
+
+    if (holder->txn)
+    {
+        _this->finish_txn(holder->txn, DMA_STATUS_DONE, DMA_ERROR_NONE);
+    }
+
+    holder->req->status = vp::IO_REQ_OK;
+    holder->req->get_resp_port()->resp(holder->req);
 }
 
 void VelocityDma::complete_event(vp::Block *__this, vp::ClockEvent *event)
