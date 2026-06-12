@@ -189,6 +189,44 @@ source init.sh
 make -B third_party/toolchain
 ```
 
+## Pushing From Codex 🔐
+
+Use SSH for pushes. HTTPS may try to open an interactive GitHub askpass prompt,
+which does not work reliably in the Codex sandbox.
+
+Set the remote to SSH:
+
+```bash
+git remote set-url origin git@github.com:husterZC/gvsoc.git
+```
+
+Check the remote:
+
+```bash
+git remote -v
+```
+
+Expected push URL:
+
+```text
+origin  git@github.com:husterZC/gvsoc.git (push)
+```
+
+Commit and push the current branch:
+
+```bash
+git add README.md
+git commit -m "Document Codex simulator setup"
+GIT_SSH_COMMAND="ssh -o BatchMode=yes" git push origin codex_velocity
+```
+
+`BatchMode=yes` makes SSH fail cleanly instead of hanging on an interactive
+passphrase or password prompt. The sandbox may print this harmless warning:
+
+```text
+X11 forwarding request failed on channel 0
+```
+
 ## Clean Rebuild Recipes 🧹
 
 Rebuild only the software:
