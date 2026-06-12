@@ -12,11 +12,11 @@ MAX_INFLIGHT="${MAX_INFLIGHT:-8}"
 PENDING_SIZE="${PENDING_SIZE:-4096}"
 
 ALL_SHAPES=(
-    "r4_c4_1pod:4:4:1:16"
-    "r4_c8_2pod:8:4:1:16"
-    "r4_c16_4pod:16:4:1:16"
-    "r8_c16_1pod:16:8:1:16"
-    "r8_c32_2pod:32:8:2:16"
+    "k4_l1_c4:4:4:1:1:16"
+    "k4_l2_c8:8:4:2:1:16"
+    "k4_l3_c16:16:4:3:1:16"
+    "k4_l4_c16:16:4:4:1:16"
+    "k5_l3_c15:15:5:3:2:16"
 )
 
 mkdir -p "${RESULT_DIR}/logs" "${ARCH_DIR}"
@@ -43,8 +43,9 @@ write_arch() {
     local path="$1"
     local clusters="$2"
     local radix="$3"
-    local link_latency="$4"
-    local link_width="$5"
+    local level="$4"
+    local link_latency="$5"
+    local link_width="$6"
 
     cat > "${path}" <<EOF
 class VelocityArch:
@@ -68,6 +69,7 @@ class VelocityArch:
         self.unified_interco                 = "fat_tree"
         self.unified_interco_topology        = "fat_tree"
         self.unified_interco_radix           = ${radix}
+        self.unified_interco_level           = ${level}
         self.unified_interco_link_latency    = ${link_latency}
         self.unified_interco_link_width      = ${link_width}
         self.unified_interco_link_pending_size = ${PENDING_SIZE}
@@ -122,18 +124,18 @@ else
 fi
 
 SUMMARY="${RESULT_DIR}/summary.csv"
-echo "shape,clusters,radix,link_latency,link_width,words,max_inflight,transfers,bytes,elapsed_ns,bandwidth_mb_s,status,log" > "${SUMMARY}"
+echo "shape,clusters,radix,level,link_latency,link_width,words,max_inflight,transfers,bytes,elapsed_ns,bandwidth_mb_s,status,log" > "${SUMMARY}"
 
 overall_status=0
 
 for shape in "${selected_shapes[@]}"; do
-    IFS=: read -r name clusters radix link_latency link_width <<< "${shape}"
+    IFS=: read -r name clusters radix level link_latency link_width <<< "${shape}"
     arch="${ARCH_DIR}/velocity_arch_${name}.py"
     log="${RESULT_DIR}/logs/${name}.log"
 
-    write_arch "${arch}" "${clusters}" "${radix}" "${link_latency}" "${link_width}"
+    write_arch "${arch}" "${clusters}" "${radix}" "${level}" "${link_latency}" "${link_width}"
 
-    echo "[fat-tree] shape=${name} clusters=${clusters} radix=${radix} link_latency=${link_latency} link_width=${link_width}"
+    echo "[fat-tree] shape=${name} clusters=${clusters} radix=${radix} level=${level} link_latency=${link_latency} link_width=${link_width}"
     echo "[fat-tree] arch=${arch}" | tee "${log}"
 
     set +e
@@ -161,7 +163,7 @@ for shape in "${selected_shapes[@]}"; do
         bandwidth_mb_s="$(awk -v bytes="${bytes}" -v ns="${elapsed_ns}" 'BEGIN { printf "%.3f", (bytes * 1000.0) / ns }')"
     fi
 
-    echo "${name},${clusters},${radix},${link_latency},${link_width},${WORDS},${MAX_INFLIGHT},${transfers},${bytes},${elapsed_ns},${bandwidth_mb_s},${status},${log}" >> "${SUMMARY}"
+    echo "${name},${clusters},${radix},${level},${link_latency},${link_width},${WORDS},${MAX_INFLIGHT},${transfers},${bytes},${elapsed_ns},${bandwidth_mb_s},${status},${log}" >> "${SUMMARY}"
 done
 
 echo "[fat-tree] summary: ${SUMMARY}"

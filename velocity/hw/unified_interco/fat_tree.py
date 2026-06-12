@@ -1,5 +1,5 @@
-import math
-from dataclasses import dataclass, field
+from collections import defaultdict, deque
+from dataclasses import dataclass
 
 import gvsoc.systree
 
@@ -10,58 +10,13 @@ from pulp.chips.velocity.unified_interco.router import UnifiedRouter
 @dataclass
 class _RouterNode:
     name: str
-    kind: str
+    level: int
+    coord: tuple[int, ...]
     router_id: int
     routes: list[int]
     next_input: int = 0
     next_output: int = 0
     component: UnifiedRouter | None = None
-    cluster_outputs: dict[int, int] = field(default_factory=dict)
-    agg_outputs: dict[int, int] = field(default_factory=dict)
-    edge_outputs: dict[int, int] = field(default_factory=dict)
-    core_outputs: dict[int, int] = field(default_factory=dict)
-    pod_outputs: dict[int, int] = field(default_factory=dict)
-
-
-class FatTreeTopoHeart:
-    def __init__(self, topology: 'FatTreeInterconnect'):
-        self.topology = topology
-
-    def attach(self):
-        for pod in range(self.topology.pod_count):
-            for edge in range(self.topology.edge_count):
-                self._attach_edge(pod, edge)
-
-            for agg in range(self.topology.agg_count):
-                self._attach_aggregation(pod, agg)
-
-        for group in range(self.topology.agg_count):
-            for core in range(self.topology.core_count):
-                self._attach_core(group, core)
-
-    def _attach_edge(self, pod: int, edge: int):
-        node = self.topology.edges[(pod, edge)]
-        for cluster in range(self.topology.num_cluster):
-            dst_pod, dst_edge, dst_host = self.topology.locate_cluster(cluster)
-            if dst_pod == pod and dst_edge == edge:
-                node.routes[cluster] = node.cluster_outputs[dst_host]
-            else:
-                node.routes[cluster] = node.agg_outputs[dst_pod % self.topology.agg_count]
-
-    def _attach_aggregation(self, pod: int, agg: int):
-        node = self.topology.aggs[(pod, agg)]
-        for cluster in range(self.topology.num_cluster):
-            dst_pod, dst_edge, _ = self.topology.locate_cluster(cluster)
-            if dst_pod == pod:
-                node.routes[cluster] = node.edge_outputs[dst_edge]
-            else:
-                node.routes[cluster] = node.core_outputs[dst_pod % self.topology.core_count]
-
-    def _attach_core(self, group: int, core: int):
-        node = self.topology.cores[(group, core)]
-        for cluster in range(self.topology.num_cluster):
-            dst_pod, _, _ = self.topology.locate_cluster(cluster)
-            node.routes[cluster] = node.pod_outputs[dst_pod]
 
 
 class FatTreeInterconnect(gvsoc.systree.Component):
@@ -72,6 +27,7 @@ class FatTreeInterconnect(gvsoc.systree.Component):
         self.num_cluster = arch.num_cluster
         self.cluster_stride = arch.dma_cluster_stride
         self.radix = getattr(arch, 'unified_interco_radix', 8)
+        self.level = getattr(arch, 'unified_interco_level', 3)
         self.link_latency = getattr(arch, 'unified_interco_link_latency', 1)
         self.link_width = getattr(arch, 'unified_interco_link_width', arch.dma_bus_width)
         self.link_pending_size = getattr(arch, 'unified_interco_link_pending_size', arch.dma_write_buffer_size)
@@ -79,43 +35,42 @@ class FatTreeInterconnect(gvsoc.systree.Component):
 
         self._sanity_check_basic()
 
-        self.host_count = self.radix // 2
-        self.edge_count = self.radix // 2
-        self.agg_count = self.radix // 2
-        self.core_count = self.radix // 2
-        self.cluster_per_pod = self.edge_count * self.host_count
-        self.pod_count = math.ceil(self.num_cluster / self.cluster_per_pod)
+        self.down_ports = self.radix if self.level == 1 else (self.radix + 1) // 2
+        self.up_ports = 0 if self.level == 1 else self.radix - self.down_ports
+        self.capacity = self._capacity()
 
-        self._sanity_check_capacity()
+        if self.num_cluster > self.capacity:
+            raise ValueError(
+                f'Fat-tree radix {self.radix} level {self.level} supports at most '
+                f'{self.capacity} clusters, got {self.num_cluster}'
+            )
 
-        self.edges: dict[tuple[int, int], _RouterNode] = {}
-        self.aggs: dict[tuple[int, int], _RouterNode] = {}
-        self.cores: dict[tuple[int, int], _RouterNode] = {}
+        self.nodes: dict[tuple[int, tuple[int, ...]], _RouterNode] = {}
+        self.node_order: list[_RouterNode] = []
         self._links: list[UnifiedLink] = []
         self._router_to_link_bindings: list[tuple[_RouterNode, int, UnifiedLink]] = []
         self._link_to_router_bindings: list[tuple[UnifiedLink, _RouterNode, int]] = []
+        self._graph: dict[str, list[tuple[str, int]]] = defaultdict(list)
 
-        self._create_nodes()
-        self._connect_clusters()
-        self._connect_edge_aggregation()
-        self._connect_aggregation_core()
-        FatTreeTopoHeart(self).attach()
+        if self.level == 1:
+            self._build_level1()
+        else:
+            self._build_multi_level()
+
+        self._compute_routes()
         self._instantiate_routers()
-
-    def locate_cluster(self, cluster: int) -> tuple[int, int, int]:
-        pod = cluster // self.cluster_per_pod
-        in_pod = cluster % self.cluster_per_pod
-        edge = in_pod // self.host_count
-        host = in_pod % self.host_count
-        return pod, edge, host
 
     def _sanity_check_basic(self):
         if self.num_cluster <= 0:
             raise ValueError('Fat-tree unified interconnect requires num_cluster > 0')
         if self.cluster_stride <= 0:
             raise ValueError('Fat-tree unified interconnect requires dma_cluster_stride > 0')
-        if self.radix < 4 or self.radix % 2 != 0:
-            raise ValueError('Fat-tree unified interconnect requires an even radix >= 4')
+        if self.radix <= 0:
+            raise ValueError('Fat-tree unified interconnect requires radix > 0')
+        if self.level <= 0:
+            raise ValueError('Fat-tree unified interconnect requires level > 0')
+        if self.level > 1 and self.radix < 2:
+            raise ValueError('Fat-tree unified interconnect requires radix >= 2 when level > 1')
         if self.link_latency < 0:
             raise ValueError('Fat-tree unified interconnect requires link latency >= 0')
         if self.link_width <= 0:
@@ -123,38 +78,28 @@ class FatTreeInterconnect(gvsoc.systree.Component):
         if self.link_pending_size < 0 or self.router_pending_size < 0:
             raise ValueError('Fat-tree unified interconnect pending sizes must be >= 0')
 
-    def _sanity_check_capacity(self):
-        max_clusters = (self.radix ** 3) // 4
-        if self.num_cluster > max_clusters:
-            raise ValueError(
-                f'Fat-tree radix {self.radix} supports at most {max_clusters} clusters, '
-                f'got {self.num_cluster}'
-            )
-        if self.pod_count > self.radix:
-            raise ValueError(
-                f'Fat-tree radix {self.radix} supports at most {self.radix} pods, '
-                f'got {self.pod_count}'
-            )
+    def _capacity(self) -> int:
+        if self.level == 1:
+            return self.radix
+        return self.radix * (self.down_ports ** (self.level - 1))
 
-    def _new_node(self, collection, key, name, kind):
-        router_id = len(self.edges) + len(self.aggs) + len(self.cores)
-        collection[key] = _RouterNode(
-            name=name,
-            kind=kind,
-            router_id=router_id,
+    def _new_node(self, level: int, coord: tuple[int, ...]) -> _RouterNode:
+        key = (level, coord)
+        node = self.nodes.get(key)
+        if node is not None:
+            return node
+
+        coord_name = '_'.join(str(value) for value in coord) if coord else '0'
+        node = _RouterNode(
+            name=f'level_{level}_{coord_name}',
+            level=level,
+            coord=coord,
+            router_id=len(self.node_order),
             routes=[-1] * self.num_cluster,
         )
-
-    def _create_nodes(self):
-        for pod in range(self.pod_count):
-            for edge in range(self.edge_count):
-                self._new_node(self.edges, (pod, edge), f'edge_{pod}_{edge}', 'edge')
-            for agg in range(self.agg_count):
-                self._new_node(self.aggs, (pod, agg), f'agg_{pod}_{agg}', 'aggregation')
-
-        for group in range(self.agg_count):
-            for core in range(self.core_count):
-                self._new_node(self.cores, (group, core), f'core_{group}_{core}', 'core')
+        self.nodes[key] = node
+        self.node_order.append(node)
+        return node
 
     def _alloc_input(self, node: _RouterNode) -> int:
         port = node.next_input
@@ -185,72 +130,125 @@ class FatTreeInterconnect(gvsoc.systree.Component):
         self._links.append(link)
         return link
 
-    def _connect_clusters(self):
-        for cluster_id, _ in enumerate(self.clusters):
-            pod, edge, host = self.locate_cluster(cluster_id)
-            edge_node = self.edges[(pod, edge)]
+    def _connect_router_to_router(self, src: _RouterNode, dst: _RouterNode):
+        out_port = self._alloc_output(src)
+        in_port = self._alloc_input(dst)
+        link = self._new_link(f'{src.name}_to_{dst.name}')
+        self._router_to_link_bindings.append((src, out_port, link))
+        self._link_to_router_bindings.append((link, dst, in_port))
+        self._graph[src.name].append((dst.name, out_port))
 
-            in_port = self._alloc_input(edge_node)
-            uplink = self._new_link(f'cluster_{cluster_id}_to_edge_{pod}_{edge}')
-            self.bind(self, f'cluster_{cluster_id}_in', uplink, 'input')
-            self._bind_link_to_router(uplink, edge_node, in_port)
+    def _connect_router_pair(self, lower: _RouterNode, upper: _RouterNode):
+        self._connect_router_to_router(lower, upper)
+        self._connect_router_to_router(upper, lower)
 
-            out_port = self._alloc_output(edge_node)
-            edge_node.cluster_outputs[host] = out_port
-            downlink = self._new_link(f'edge_{pod}_{edge}_to_cluster_{cluster_id}')
-            self._bind_router_to_link(edge_node, out_port, downlink)
-            downlink.o_OUTPUT(gvsoc.systree.SlaveItf(self, f'cluster_{cluster_id}_out', signature='io'))
+    def _connect_cluster(self, cluster_id: int, leaf: _RouterNode):
+        in_port = self._alloc_input(leaf)
+        uplink = self._new_link(f'cluster_{cluster_id}_to_{leaf.name}')
+        self.bind(self, f'cluster_{cluster_id}_in', uplink, 'input')
+        self._link_to_router_bindings.append((uplink, leaf, in_port))
 
-    def _connect_edge_aggregation(self):
-        for pod in range(self.pod_count):
-            for edge in range(self.edge_count):
-                edge_node = self.edges[(pod, edge)]
-                for agg in range(self.agg_count):
-                    agg_node = self.aggs[(pod, agg)]
+        out_port = self._alloc_output(leaf)
+        downlink = self._new_link(f'{leaf.name}_to_cluster_{cluster_id}')
+        self._router_to_link_bindings.append((leaf, out_port, downlink))
+        downlink.o_OUTPUT(gvsoc.systree.SlaveItf(self, f'cluster_{cluster_id}_out', signature='io'))
+        self._graph[leaf.name].append((self._cluster_sink(cluster_id), out_port))
 
-                    edge_out = self._alloc_output(edge_node)
-                    agg_in = self._alloc_input(agg_node)
-                    edge_node.agg_outputs[agg] = edge_out
-                    link_up = self._new_link(f'edge_{pod}_{edge}_to_agg_{pod}_{agg}')
-                    self._bind_router_to_link(edge_node, edge_out, link_up)
-                    self._bind_link_to_router(link_up, agg_node, agg_in)
+    def _cluster_sink(self, cluster_id: int) -> str:
+        return f'cluster_{cluster_id}'
 
-                    agg_out = self._alloc_output(agg_node)
-                    edge_in = self._alloc_input(edge_node)
-                    agg_node.edge_outputs[edge] = agg_out
-                    link_down = self._new_link(f'agg_{pod}_{agg}_to_edge_{pod}_{edge}')
-                    self._bind_router_to_link(agg_node, agg_out, link_down)
-                    self._bind_link_to_router(link_down, edge_node, edge_in)
+    def _build_level1(self):
+        root = self._new_node(0, ())
+        for cluster_id in range(self.num_cluster):
+            self._connect_cluster(cluster_id, root)
 
-    def _connect_aggregation_core(self):
-        for pod in range(self.pod_count):
-            for agg in range(self.agg_count):
-                agg_node = self.aggs[(pod, agg)]
-                for core in range(self.core_count):
-                    core_node = self.cores[(agg, core)]
+    def _build_multi_level(self):
+        cluster_coords = [self.locate_cluster(cluster_id) for cluster_id in range(self.num_cluster)]
 
-                    agg_out = self._alloc_output(agg_node)
-                    core_in = self._alloc_input(core_node)
-                    agg_node.core_outputs[core] = agg_out
-                    link_up = self._new_link(f'agg_{pod}_{agg}_to_core_{agg}_{core}')
-                    self._bind_router_to_link(agg_node, agg_out, link_up)
-                    self._bind_link_to_router(link_up, core_node, core_in)
+        for cluster_id, coord in enumerate(cluster_coords):
+            leaf = self._new_node(0, self._leaf_coord(coord))
+            self._connect_cluster(cluster_id, leaf)
 
-                    core_out = self._alloc_output(core_node)
-                    agg_in = self._alloc_input(agg_node)
-                    core_node.pod_outputs[pod] = core_out
-                    link_down = self._new_link(f'core_{agg}_{core}_to_agg_{pod}_{agg}')
-                    self._bind_router_to_link(core_node, core_out, link_down)
-                    self._bind_link_to_router(link_down, agg_node, agg_in)
+        for lower_level in range(self.level - 1):
+            for lower_coord in self._active_coords(lower_level):
+                lower = self._new_node(lower_level, lower_coord)
+                for up_index in range(self.up_ports):
+                    upper_level = lower_level + 1
+                    upper_coord = self._upper_coord(lower_level, lower_coord, up_index)
+                    upper = self._new_node(upper_level, upper_coord)
+                    self._connect_router_pair(lower, upper)
 
-    def _bind_router_to_link(self, node: _RouterNode, port: int, link: UnifiedLink):
-        self._router_to_link_bindings.append((node, port, link))
+    def _active_coords(self, level: int) -> list[tuple[int, ...]]:
+        return sorted(coord for node_level, coord in self.nodes if node_level == level)
 
-    def _bind_link_to_router(self, link: UnifiedLink, node: _RouterNode, port: int):
-        self._link_to_router_bindings.append((link, node, port))
+    def locate_cluster(self, cluster: int) -> tuple[int, tuple[int, ...]]:
+        if self.level == 1:
+            return cluster, ()
+
+        local_capacity = self.down_ports ** (self.level - 1)
+        pod = cluster // local_capacity
+        local = cluster % local_capacity
+
+        digits = []
+        for power in range(self.level - 2, -1, -1):
+            divisor = self.down_ports ** power
+            digits.append(local // divisor)
+            local %= divisor
+
+        return pod, tuple(digits)
+
+    def _leaf_coord(self, cluster_coord: tuple[int, tuple[int, ...]]) -> tuple[int, ...]:
+        pod, digits = cluster_coord
+        return (pod,) + digits[:-1]
+
+    def _upper_coord(self, lower_level: int, lower_coord: tuple[int, ...], up_index: int) -> tuple[int, ...]:
+        lower_down_count = self.level - 2 - lower_level
+        upper_down_count = self.level - 2 - (lower_level + 1)
+        up_prefix = lower_coord[1 + lower_down_count:]
+
+        if lower_level + 1 == self.level - 1:
+            return up_prefix + (up_index,)
+
+        pod = lower_coord[0]
+        down_prefix = lower_coord[1:1 + upper_down_count]
+        return (pod,) + down_prefix + up_prefix + (up_index,)
+
+    def _compute_routes(self):
+        reverse_graph: dict[str, list[str]] = defaultdict(list)
+        for src, edges in self._graph.items():
+            for dst, _ in edges:
+                reverse_graph[dst].append(src)
+
+        for cluster_id in range(self.num_cluster):
+            target = self._cluster_sink(cluster_id)
+            distance = {target: 0}
+            queue = deque([target])
+
+            while queue:
+                node = queue.popleft()
+                for predecessor in reverse_graph[node]:
+                    if predecessor not in distance:
+                        distance[predecessor] = distance[node] + 1
+                        queue.append(predecessor)
+
+            for node in self.node_order:
+                if node.name not in distance:
+                    raise ValueError(
+                        f'Fat-tree router {node.name} cannot route to cluster {cluster_id}'
+                    )
+
+                for dst, port in self._graph[node.name]:
+                    if distance.get(dst) == distance[node.name] - 1:
+                        node.routes[cluster_id] = port
+                        break
+
+                if node.routes[cluster_id] < 0:
+                    raise ValueError(
+                        f'Fat-tree router {node.name} has no next hop to cluster {cluster_id}'
+                    )
 
     def _instantiate_routers(self):
-        for node in list(self.edges.values()) + list(self.aggs.values()) + list(self.cores.values()):
+        for node in self.node_order:
             node.component = UnifiedRouter(
                 self,
                 node.name,

@@ -5,6 +5,9 @@ each other cluster. The source DMA stamps the cycle when the packet enters the
 remote interconnect, and the destination DMA stamps the cycle when the packet
 arrives at the destination DMA input.
 
+Shapes are described as `k<radix>_l<level>_c<clusters>`, matching the
+fat-tree all-to-all test.
+
 From the repository root:
 
 ```bash
@@ -14,7 +17,7 @@ velocity/tests/unified_interco/zero_load_latency/run_zero_load_latency.sh
 Run one or more default fat-tree shapes:
 
 ```bash
-velocity/tests/unified_interco/zero_load_latency/run_zero_load_latency.sh r4_c4_1pod r4_c8_2pod
+velocity/tests/unified_interco/zero_load_latency/run_zero_load_latency.sh k4_l1_c4 k4_l3_c16
 ```
 
 Run against a specific architecture file:

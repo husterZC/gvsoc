@@ -168,6 +168,8 @@ int main(void)
         flex_print_int(ARCH_NUM_CLUSTER);
         flex_print(" radix=");
         flex_print_int(ARCH_UNIFIED_INTERCO_RADIX);
+        flex_print(" level=");
+        flex_print_int(ARCH_UNIFIED_INTERCO_LEVEL);
         flex_print(" link_latency=");
         flex_print_int(ARCH_UNIFIED_INTERCO_LINK_LATENCY);
         flex_print(" link_width=");

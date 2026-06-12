@@ -40,6 +40,7 @@ class VelocityArch:
         self.unified_interco                 = None
         self.unified_interco_topology        = "fat_tree"
         self.unified_interco_radix           = 8
+        self.unified_interco_level           = 3
         self.unified_interco_link_latency    = 1
         self.unified_interco_link_width      = self.dma_bus_width
         self.unified_interco_link_pending_size = self.dma_write_buffer_size
