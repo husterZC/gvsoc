@@ -22,8 +22,8 @@ import gvsoc.systree
 from pulp.snitch.snitch_cluster.dma_interleaver import DmaInterleaver
 from pulp.snitch.zero_mem import ZeroMem
 from elftools.elf.elffile import *
-from pulp.idma.snitch_dma import SnitchDma
 from pulp.cluster.l1_interleaver import L1_interleaver
+from pulp.chips.velocity.velocity_dma import VelocityDma
 import gvsoc.runner
 import math
 from pulp.snitch.sequencer import Sequencer
@@ -62,7 +62,12 @@ class ClusterArch:
         stack_base,         stack_size,
         zomem_base,         zomem_size,
         reg_base,           reg_size,
-        idma_outstand_txn,  idma_outstand_burst,
+        dma_reg_offset,     dma_reg_size,
+        dma_bus_width,      dma_read_buffer_size,
+        dma_write_buffer_size,
+        dma_max_inflight_txn,
+        dma_base_latency,
+        dma_cluster_stride,
         auto_fetch=False):
 
         self.num_cluster            = num_cluster
@@ -79,8 +84,14 @@ class ClusterArch:
         self.zomem_size             = zomem_size
         self.reg_base               = reg_base
         self.reg_size               = reg_size
-        self.idma_outstand_txn      = idma_outstand_txn
-        self.idma_outstand_burst    = idma_outstand_burst
+        self.dma_reg_offset         = dma_reg_offset
+        self.dma_reg_size           = dma_reg_size
+        self.dma_bus_width          = dma_bus_width
+        self.dma_read_buffer_size   = dma_read_buffer_size
+        self.dma_write_buffer_size  = dma_write_buffer_size
+        self.dma_max_inflight_txn   = dma_max_inflight_txn
+        self.dma_base_latency       = dma_base_latency
+        self.dma_cluster_stride     = dma_cluster_stride
         self.auto_fetch             = auto_fetch
 
 
@@ -92,7 +103,7 @@ class ClusterTcdm(gvsoc.systree.Component):
         banks = []
         nb_banks = arch.num_lane
         bank_size = (arch.tcdm_size / arch.num_lane) + arch.lane_width
-        nb_masters = 1 + arch.num_lane
+        nb_masters = 2 + arch.num_lane
         for i in range(0, nb_banks):
             banks.append(memory.Memory(self, f'bank_{i}', size=bank_size, atomics=True, width_log2=int(math.log2(arch.lane_width))))
 
@@ -151,6 +162,21 @@ class ClusterUnit(gvsoc.systree.Component):
         # Core interco
         core_ico = router.Router(self, f'core_ico', bandwidth=8)
 
+        # Cluster DMA
+        dma = VelocityDma(
+            self,
+            'dma',
+            cluster_id=arch.cluster_id,
+            num_cluster=arch.num_cluster,
+            tcdm_size=arch.tcdm_size,
+            bus_width=arch.dma_bus_width,
+            max_inflight=arch.dma_max_inflight_txn,
+            read_buffer_size=arch.dma_read_buffer_size,
+            write_buffer_size=arch.dma_write_buffer_size,
+            base_latency=arch.dma_base_latency,
+            cluster_stride=arch.dma_cluster_stride,
+        )
+
 
         #
         # Bindings
@@ -175,6 +201,10 @@ class ClusterUnit(gvsoc.systree.Component):
         core_ico.o_MAP(instr_router.i_INPUT(),         base=arch.inst_base,    size=arch.inst_size,    rm_base=False)
         core_ico.o_MAP(stack_mem.i_INPUT(),            base=arch.stack_base,   size=arch.stack_size,   rm_base=True)
         core_ico.o_MAP(tcdm.i_INPUT(arch.num_lane),    base=arch.tcdm_base,    size=arch.tcdm_size,    rm_base=True)
+        core_ico.o_MAP(dma.i_REGS(),                   base=arch.reg_base + arch.dma_reg_offset, size=arch.dma_reg_size, rm_base=True)
+        dma.o_TCDM(tcdm.i_INPUT(arch.num_lane + 1))
+        self.bind(dma, 'remote_out', self, 'dma_remote_out')
+        self.bind(self, 'dma_remote_in', dma, 'remote_in')
 
 
     def i_VIRTUAL_SOC(self) -> gvsoc.systree.SlaveItf:
@@ -183,4 +213,8 @@ class ClusterUnit(gvsoc.systree.Component):
     def o_VIRTUAL_SOC(self, itf: gvsoc.systree.SlaveItf):
         self.itf_bind('virtual_soc', itf, signature='io')
 
+    def i_DMA_REMOTE(self) -> gvsoc.systree.SlaveItf:
+        return gvsoc.systree.SlaveItf(self, 'dma_remote_in', signature='io')
 
+    def o_DMA_REMOTE(self, itf: gvsoc.systree.SlaveItf):
+        self.itf_bind('dma_remote_out', itf, signature='io')

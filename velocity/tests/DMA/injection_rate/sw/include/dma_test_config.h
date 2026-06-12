@@ -1,0 +1,7 @@
+#ifndef DMA_TEST_CONFIG_H
+#define DMA_TEST_CONFIG_H
+
+#define DMA_TEST_INJECT_GAP 0u
+#define DMA_TEST_MAX_INFLIGHT 8u
+
+#endif

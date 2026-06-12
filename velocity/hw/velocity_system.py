@@ -68,13 +68,28 @@ class VelocitySystem(gvsoc.systree.Component):
         								zomem_size 			= arch.cluster_zomem_size,
         								reg_base 			= arch.cluster_reg_base,
         								reg_size 			= arch.cluster_reg_size,
-        								idma_outstand_txn 	= arch.idma_outstand_txn,
-        								idma_outstand_burst = arch.idma_outstand_burst)
+                                        dma_reg_offset      = arch.dma_reg_offset,
+                                        dma_reg_size        = arch.dma_reg_size,
+                                        dma_bus_width       = arch.dma_bus_width,
+                                        dma_read_buffer_size = arch.dma_read_buffer_size,
+                                        dma_write_buffer_size = arch.dma_write_buffer_size,
+                                        dma_max_inflight_txn = arch.dma_max_inflight_txn,
+                                        dma_base_latency    = arch.dma_base_latency,
+                                        dma_cluster_stride  = arch.dma_cluster_stride)
             cluster_list.append(ClusterUnit(self,f'cluster_{cluster_id}', cluster_arch, binary))
             pass
 
         #Virtual router, just for debugging and non-performance-critical jobs
         virtual_interco = router.Router(self, 'virtual_interco', bandwidth=8)
+
+        # DMA data router. DMA remote requests address clusters by cluster id.
+        dma_interco = router.Router(
+            self,
+            'dma_interco',
+            bandwidth=arch.dma_bus_width,
+            synchronous=False,
+            max_input_pending_size=arch.dma_write_buffer_size,
+        )
 
         #Debug Memory
         debug_mem = memory.memory.Memory(self,'debug_mem', size=1)
@@ -95,6 +110,11 @@ class VelocitySystem(gvsoc.systree.Component):
         #Clusters
         for cluster_id in range(arch.num_cluster):
             cluster_list[cluster_id].o_VIRTUAL_SOC(virtual_interco.i_INPUT())
+            cluster_list[cluster_id].o_DMA_REMOTE(dma_interco.i_INPUT())
+            dma_interco.o_MAP(cluster_list[cluster_id].i_DMA_REMOTE(),
+                              base=cluster_id * arch.dma_cluster_stride,
+                              size=arch.dma_cluster_stride,
+                              rm_base=True)
             pass
 
 

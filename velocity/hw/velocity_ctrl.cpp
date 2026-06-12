@@ -23,7 +23,27 @@
 #include <vp/vp.hpp>
 #include <vp/itf/io.hpp>
 #include <vp/itf/wire.hpp>
+#include <cstdint>
 #include <iostream>
+#include <vector>
+
+namespace {
+
+constexpr uint64_t REG_EOC             = 0x00;
+constexpr uint64_t REG_EOC_ALL         = 0x04;
+constexpr uint64_t REG_TIMER_START     = 0x08;
+constexpr uint64_t REG_TIMER_END_PRINT = 0x0c;
+constexpr uint64_t REG_LOG_CHAR        = 0x10;
+constexpr uint64_t REG_LOG_INT         = 0x14;
+constexpr uint64_t REG_TIME_LO         = 0x18;
+constexpr uint64_t REG_TIME_HI         = 0x1c;
+constexpr uint64_t REG_TIMER_LO        = 0x20;
+constexpr uint64_t REG_TIMER_HI        = 0x24;
+constexpr uint64_t REG_BARRIER_ARRIVE  = 0x28;
+constexpr uint64_t REG_BARRIER_PHASE   = 0x2c;
+constexpr uint64_t REG_BARRIER_COUNT   = 0x30;
+
+} // namespace
 
 void printProgressBar(int progress, int total, int width = 100) {
     float ratio = (float)progress / total;
@@ -52,6 +72,7 @@ public:
 
 private:
     static vp::IoReqStatus req(vp::Block *__this, vp::IoReq *req);
+    static void barrier_release(vp::Block *__this, vp::ClockEvent *event);
     void reset(bool active);
 
     vp::Trace               trace;
@@ -59,6 +80,10 @@ private:
     uint32_t                num_cluster;
     int64_t                 timer_start;
     int64_t                 all_eoc_conuter;
+    uint32_t                barrier_count;
+    uint32_t                barrier_phase;
+    std::vector<vp::IoReq *> barrier_reqs;
+    vp::ClockEvent          *barrier_release_event;
 };
 
 
@@ -73,6 +98,9 @@ VelocityCtrl::VelocityCtrl(vp::ComponentConf &config)
     this->new_slave_port("input", &this->input_itf);
     this->timer_start = 0;
     this->all_eoc_conuter = 0;
+    this->barrier_count = 0;
+    this->barrier_phase = 0;
+    this->barrier_release_event = this->event_new(VelocityCtrl::barrier_release);
 }
 
 void VelocityCtrl::reset(bool active)
@@ -92,15 +120,20 @@ vp::IoReqStatus VelocityCtrl::req(vp::Block *__this, vp::IoReq *req)
     uint64_t size = req->get_size();
     bool is_write = req->get_is_write();
 
-    if (is_write && size == 4)
+    if (size != 4)
+    {
+        return vp::IO_REQ_INVALID;
+    }
+
+    if (is_write)
     {
         uint32_t value = *(uint32_t *)data;
-        if (offset == 0)
+        if (offset == REG_EOC)
         {
             // std::cout << "EOC register return value: 0x" << std::hex << value << std::endl;
             _this->time.get_engine()->quit(0);
         }
-        if (offset == 4)
+        else if (offset == REG_EOC_ALL)
         {
             _this->all_eoc_conuter += 1;
             // _this->trace.msg("Control registers access (offset: 0x%x, size: 0x%x, is_write: %d, data:%x)\n", offset, size, is_write, *(uint32_t *)data);
@@ -110,28 +143,91 @@ vp::IoReqStatus VelocityCtrl::req(vp::Block *__this, vp::IoReq *req)
                 _this->time.get_engine()->quit(0);
             }
         }
-        if (offset == 8)
+        else if (offset == REG_TIMER_START)
         {
             _this->timer_start = _this->time.get_time();
         }
-        if (offset == 12)
+        else if (offset == REG_TIMER_END_PRINT)
         {
             int64_t period = _this->time.get_time() - _this->timer_start;
             std::cout << "[Performance Counter]: Execution period is " << period/1000 << " ns" << std::endl;
             _this->timer_start = _this->time.get_time();
         }
-        if (offset == 16)
+        else if (offset == REG_LOG_CHAR)
         {
             char c = (char)value;
             std::cout << c;
         }
-        if (offset == 20)
+        else if (offset == REG_LOG_INT)
         {
             std::cout << value;
         }
+        else if (offset == REG_BARRIER_ARRIVE)
+        {
+            _this->barrier_count += 1;
+            if (_this->barrier_count >= _this->num_cluster)
+            {
+                _this->barrier_count = 0;
+                _this->barrier_phase += 1;
+                _this->barrier_release_event->enqueue(1);
+            }
+            else
+            {
+                _this->barrier_reqs.push_back(req);
+                return vp::IO_REQ_PENDING;
+            }
+        }
+        else
+        {
+            return vp::IO_REQ_INVALID;
+        }
+
+        return vp::IO_REQ_OK;
+    }
+
+    uint64_t value = 0;
+    switch (offset)
+    {
+        case REG_TIME_LO:
+            value = _this->time.get_time();
+            *(uint32_t *)data = value & 0xffffffff;
+            break;
+        case REG_TIME_HI:
+            value = _this->time.get_time();
+            *(uint32_t *)data = value >> 32;
+            break;
+        case REG_TIMER_LO:
+            value = _this->time.get_time() - _this->timer_start;
+            *(uint32_t *)data = value & 0xffffffff;
+            break;
+        case REG_TIMER_HI:
+            value = _this->time.get_time() - _this->timer_start;
+            *(uint32_t *)data = value >> 32;
+            break;
+        case REG_BARRIER_PHASE:
+            *(uint32_t *)data = _this->barrier_phase;
+            break;
+        case REG_BARRIER_COUNT:
+            *(uint32_t *)data = _this->barrier_count;
+            break;
+        default:
+            return vp::IO_REQ_INVALID;
     }
 
     return vp::IO_REQ_OK;
+}
+
+void VelocityCtrl::barrier_release(vp::Block *__this, vp::ClockEvent *event)
+{
+    VelocityCtrl *_this = (VelocityCtrl *)__this;
+
+    std::vector<vp::IoReq *> pending_reqs;
+    pending_reqs.swap(_this->barrier_reqs);
+
+    for (vp::IoReq *pending_req: pending_reqs)
+    {
+        pending_req->get_resp_port()->resp(pending_req);
+    }
 }
 
 
