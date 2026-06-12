@@ -25,6 +25,7 @@ import interco.router as router
 import utils.loader.loader
 import gvsoc.systree
 from pulp.chips.velocity.cluster_unit import ClusterUnit, ClusterArch
+from pulp.chips.velocity.unified_interco import FatTreeInterconnect
 from pulp.chips.velocity.velocity_ctrl import VelocityCtrl
 from pulp.chips.velocity.velocity_arch import VelocityArch
 import math
@@ -82,14 +83,21 @@ class VelocitySystem(gvsoc.systree.Component):
         #Virtual router, just for debugging and non-performance-critical jobs
         virtual_interco = router.Router(self, 'virtual_interco', bandwidth=8)
 
-        # DMA data router. DMA remote requests address clusters by cluster id.
-        dma_interco = router.Router(
-            self,
-            'dma_interco',
-            bandwidth=arch.dma_bus_width,
-            synchronous=False,
-            max_input_pending_size=arch.dma_write_buffer_size,
-        )
+        unified_interco = getattr(arch, 'unified_interco', None)
+        unified_topology = getattr(arch, 'unified_interco_topology', 'fat_tree')
+        if unified_interco == 'fat_tree' or (unified_interco is True and unified_topology == 'fat_tree'):
+            dma_interco = FatTreeInterconnect(self, 'dma_interco', cluster_list, arch)
+        elif unified_interco is not None:
+            raise ValueError(f'Unsupported Velocity unified_interco topology: {unified_interco}')
+        else:
+            # DMA data router. DMA remote requests address clusters by cluster id.
+            dma_interco = router.Router(
+                self,
+                'dma_interco',
+                bandwidth=arch.dma_bus_width,
+                synchronous=False,
+                max_input_pending_size=arch.dma_write_buffer_size,
+            )
 
         #Debug Memory
         debug_mem = memory.memory.Memory(self,'debug_mem', size=1)
@@ -110,11 +118,15 @@ class VelocitySystem(gvsoc.systree.Component):
         #Clusters
         for cluster_id in range(arch.num_cluster):
             cluster_list[cluster_id].o_VIRTUAL_SOC(virtual_interco.i_INPUT())
-            cluster_list[cluster_id].o_DMA_REMOTE(dma_interco.i_INPUT())
-            dma_interco.o_MAP(cluster_list[cluster_id].i_DMA_REMOTE(),
-                              base=cluster_id * arch.dma_cluster_stride,
-                              size=arch.dma_cluster_stride,
-                              rm_base=True)
+            if unified_interco == 'fat_tree' or (unified_interco is True and unified_topology == 'fat_tree'):
+                cluster_list[cluster_id].o_DMA_REMOTE(dma_interco.i_CLUSTER_INPUT(cluster_id))
+                dma_interco.o_CLUSTER_OUTPUT(cluster_id, cluster_list[cluster_id].i_DMA_REMOTE())
+            elif unified_interco is None:
+                cluster_list[cluster_id].o_DMA_REMOTE(dma_interco.i_INPUT())
+                dma_interco.o_MAP(cluster_list[cluster_id].i_DMA_REMOTE(),
+                                  base=cluster_id * arch.dma_cluster_stride,
+                                  size=arch.dma_cluster_stride,
+                                  rm_base=True)
             pass
 
 

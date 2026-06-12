@@ -1,6 +1,4 @@
-import re
-import ast
-import math
+import importlib.util
 import argparse
 
 parser = argparse.ArgumentParser(description="Generate C and S header files from a Velocity configuration file.")
@@ -12,18 +10,17 @@ input_file = args.input_file
 C_header_file = 'velocity/sw/runtime/include/velocity_arch.h'
 S_header_file = 'velocity/sw/runtime/include/velocity_arch.inc'
 
-# Initialize a dictionary to store the class attributes and their values
-attributes = {}
+spec = importlib.util.spec_from_file_location('velocity_arch_config', input_file)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+arch = module.VelocityArch()
 
-# Read the input file and extract the class attributes
-with open(input_file, 'r') as file:
-    lines = file.readlines()
-    for line in lines:
-        match = re.match(r'\s*self\.(\w+)\s*=\s*(.+)', line)
-        if match:
-            attr_name = match.group(1)
-            attr_value = match.group(2)
-            attributes[attr_name] = attr_value
+attributes = {}
+for attr_name, attr_value in vars(arch).items():
+    if isinstance(attr_value, bool):
+        attributes[attr_name] = int(attr_value)
+    elif isinstance(attr_value, int):
+        attributes[attr_name] = attr_value
 
 # Write the output C header file
 with open(C_header_file, 'w') as file:

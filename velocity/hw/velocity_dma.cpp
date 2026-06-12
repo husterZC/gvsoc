@@ -140,6 +140,7 @@ private:
         uint32_t local_offset, uint32_t remote_offset, uint32_t payload_size, uint8_t *payload,
         uint64_t completion_latency);
     bool send_packet(std::unique_ptr<OutgoingPacket> packet);
+    bool issue_packet(OutgoingPacket *packet);
     bool schedule_packet_send(std::unique_ptr<OutgoingPacket> packet, uint64_t cycles);
     void complete_packet(OutgoingPacket *packet, vp::IoReqStatus status, bool synchronous);
     void schedule_remote_write_response(Txn *txn, vp::IoReq *req, uint64_t cycles);
@@ -363,11 +364,15 @@ bool VelocityDma::send_packet(std::unique_ptr<OutgoingPacket> packet)
     raw->req.set_is_write(true);
 
     this->remote_pending[&raw->req] = std::move(packet);
-    vp::IoReqStatus status = this->remote_out_itf.req(&raw->req);
+    return this->issue_packet(raw);
+}
 
+bool VelocityDma::issue_packet(OutgoingPacket *packet)
+{
+    vp::IoReqStatus status = this->remote_out_itf.req(&packet->req);
     if (status == vp::IO_REQ_OK)
     {
-        this->complete_packet(raw, vp::IO_REQ_OK, true);
+        this->complete_packet(packet, vp::IO_REQ_OK, true);
         return true;
     }
     if (status == vp::IO_REQ_PENDING || status == vp::IO_REQ_DENIED)
@@ -375,7 +380,7 @@ bool VelocityDma::send_packet(std::unique_ptr<OutgoingPacket> packet)
         return true;
     }
 
-    this->complete_packet(raw, status, true);
+    this->complete_packet(packet, status, true);
     return false;
 }
 
@@ -716,7 +721,6 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
                 return vp::IO_REQ_INVALID;
             }
 
-            req->inc_latency(latency + _this->base_latency);
             if (!_this->submit_remote_read_resp(header.src_cluster, header.txn_id,
                 header.remote_offset, header.local_offset, header.payload_size, buffer.data(),
                 latency + _this->base_latency))
@@ -765,10 +769,14 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
 void VelocityDma::remote_grant(vp::Block *__this, vp::IoReq *req)
 {
     VelocityDma *_this = (VelocityDma *)__this;
-    if (_this->remote_pending.find(req) == _this->remote_pending.end())
+    auto it = _this->remote_pending.find(req);
+    if (it == _this->remote_pending.end())
     {
         _this->last_error = DMA_ERROR_REMOTE_ACCESS;
+        return;
     }
+
+    _this->issue_packet(it->second.get());
 }
 
 void VelocityDma::remote_resp(vp::Block *__this, vp::IoReq *req)
