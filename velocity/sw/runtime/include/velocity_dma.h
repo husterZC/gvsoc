@@ -16,6 +16,13 @@
 #define VELOCITY_DMA_REG_DONE_ID        0x24
 #define VELOCITY_DMA_REG_ERROR          0x28
 #define VELOCITY_DMA_REG_CMD            0x2c
+#define VELOCITY_DMA_REG_PROBE_ENTER_LO 0x30
+#define VELOCITY_DMA_REG_PROBE_ENTER_HI 0x34
+#define VELOCITY_DMA_REG_PROBE_EXIT_LO  0x38
+#define VELOCITY_DMA_REG_PROBE_EXIT_HI  0x3c
+#define VELOCITY_DMA_REG_PROBE_LAT_LO   0x40
+#define VELOCITY_DMA_REG_PROBE_LAT_HI   0x44
+#define VELOCITY_DMA_REG_PROBE_DST      0x48
 
 #define VELOCITY_DMA_CMD_REMOTE_CLUSTER_MASK 0x0000ffffu
 #define VELOCITY_DMA_CMD_TYPE_SHIFT          16
@@ -25,6 +32,7 @@
 
 #define VELOCITY_DMA_TYPE_READ          0
 #define VELOCITY_DMA_TYPE_WRITE         1
+#define VELOCITY_DMA_TYPE_LATENCY_PROBE 2
 
 #define VELOCITY_DMA_STATUS_IDLE        0
 #define VELOCITY_DMA_STATUS_BUSY        1
@@ -84,6 +92,53 @@ static inline uint32_t velocity_dma_read(
 {
     return velocity_dma_start(remote_cluster, local_offset, remote_offset,
         size, VELOCITY_DMA_TYPE_READ, txn_id);
+}
+
+static inline uint32_t velocity_dma_probe(
+    uint32_t remote_cluster,
+    uint32_t txn_id)
+{
+    return velocity_dma_start(remote_cluster, 0, 0, 0,
+        VELOCITY_DMA_TYPE_LATENCY_PROBE, txn_id);
+}
+
+static inline uint64_t velocity_dma_read64_regs(uint32_t lo_offset, uint32_t hi_offset)
+{
+    uint32_t hi;
+    uint32_t lo;
+    uint32_t hi_check;
+
+    do
+    {
+        hi = *velocity_dma_reg(hi_offset);
+        lo = *velocity_dma_reg(lo_offset);
+        hi_check = *velocity_dma_reg(hi_offset);
+    } while (hi != hi_check);
+
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static inline uint64_t velocity_dma_probe_enter_cycle(void)
+{
+    return velocity_dma_read64_regs(VELOCITY_DMA_REG_PROBE_ENTER_LO,
+        VELOCITY_DMA_REG_PROBE_ENTER_HI);
+}
+
+static inline uint64_t velocity_dma_probe_exit_cycle(void)
+{
+    return velocity_dma_read64_regs(VELOCITY_DMA_REG_PROBE_EXIT_LO,
+        VELOCITY_DMA_REG_PROBE_EXIT_HI);
+}
+
+static inline uint64_t velocity_dma_probe_latency_cycle(void)
+{
+    return velocity_dma_read64_regs(VELOCITY_DMA_REG_PROBE_LAT_LO,
+        VELOCITY_DMA_REG_PROBE_LAT_HI);
+}
+
+static inline uint32_t velocity_dma_probe_dst(void)
+{
+    return *velocity_dma_reg(VELOCITY_DMA_REG_PROBE_DST);
 }
 
 static inline uint32_t velocity_dma_status(uint32_t txn_id)

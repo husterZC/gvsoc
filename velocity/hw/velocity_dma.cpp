@@ -39,6 +39,13 @@ constexpr uint64_t REG_QUERY_ID       = 0x20;
 constexpr uint64_t REG_DONE_ID        = 0x24;
 constexpr uint64_t REG_ERROR          = 0x28;
 constexpr uint64_t REG_CMD            = 0x2c;
+constexpr uint64_t REG_PROBE_ENTER_LO = 0x30;
+constexpr uint64_t REG_PROBE_ENTER_HI = 0x34;
+constexpr uint64_t REG_PROBE_EXIT_LO  = 0x38;
+constexpr uint64_t REG_PROBE_EXIT_HI  = 0x3c;
+constexpr uint64_t REG_PROBE_LAT_LO   = 0x40;
+constexpr uint64_t REG_PROBE_LAT_HI   = 0x44;
+constexpr uint64_t REG_PROBE_DST      = 0x48;
 
 constexpr uint32_t CMD_REMOTE_CLUSTER_MASK = 0x0000ffff;
 constexpr uint32_t CMD_TYPE_SHIFT = 16;
@@ -48,6 +55,7 @@ constexpr uint32_t CMD_TXN_ID_MASK = 0x000000ff;
 
 constexpr uint32_t DMA_TYPE_READ = 0;
 constexpr uint32_t DMA_TYPE_WRITE = 1;
+constexpr uint32_t DMA_TYPE_LATENCY_PROBE = 2;
 
 constexpr uint32_t DMA_STATUS_IDLE = 0;
 constexpr uint32_t DMA_STATUS_BUSY = 1;
@@ -70,6 +78,7 @@ constexpr uint32_t DMA_ERROR_BAD_DEST = 11;
 constexpr uint32_t REMOTE_PHASE_WRITE = 0;
 constexpr uint32_t REMOTE_PHASE_READ_REQ = 1;
 constexpr uint32_t REMOTE_PHASE_READ_RESP = 2;
+constexpr uint32_t REMOTE_PHASE_LATENCY_PROBE = 3;
 
 struct RemoteHeader
 {
@@ -81,6 +90,8 @@ struct RemoteHeader
     uint32_t payload_size;
     uint32_t local_offset;
     uint32_t remote_offset;
+    uint64_t network_enter_cycle;
+    uint64_t network_exit_cycle;
 };
 
 constexpr uint32_t REMOTE_MAGIC = 0x56444d41; // "VDMA"
@@ -148,6 +159,9 @@ private:
     bool submit_remote_read_req(Txn *txn, uint64_t latency);
     bool submit_remote_read_resp(uint32_t dst_cluster, uint32_t txn_id, uint32_t local_offset,
         uint32_t remote_offset, uint32_t size, uint8_t *payload, uint64_t latency);
+    bool submit_latency_probe(Txn *txn);
+    void stamp_latency_probe_enter(OutgoingPacket *packet);
+    void record_latency_probe(OutgoingPacket *packet);
     void finish_txn(Txn *txn, uint32_t status, uint32_t error);
     void launch_txn(uint32_t requested_id);
     void launch_packed_cmd(uint32_t cmd);
@@ -182,6 +196,10 @@ private:
     uint32_t done_id_reg = 0;
     uint32_t last_error = DMA_ERROR_NONE;
     uint32_t next_txn_id = 1;
+    uint32_t last_probe_dst = 0;
+    uint64_t last_probe_enter_cycle = 0;
+    uint64_t last_probe_exit_cycle = 0;
+    uint64_t last_probe_latency = 0;
 
     std::deque<Txn *> ready;
     std::unordered_map<uint32_t, std::unique_ptr<Txn>> txns;
@@ -276,10 +294,15 @@ bool VelocityDma::validate_common(Txn *txn)
         txn->error = DMA_ERROR_BAD_CLUSTER;
         return false;
     }
-    if (txn->type != DMA_TYPE_READ && txn->type != DMA_TYPE_WRITE)
+    if (txn->type != DMA_TYPE_READ && txn->type != DMA_TYPE_WRITE &&
+        txn->type != DMA_TYPE_LATENCY_PROBE)
     {
         txn->error = DMA_ERROR_BAD_TYPE;
         return false;
+    }
+    if (txn->type == DMA_TYPE_LATENCY_PROBE)
+    {
+        return true;
     }
     if (txn->size == 0)
     {
@@ -338,6 +361,8 @@ std::unique_ptr<VelocityDma::OutgoingPacket> VelocityDma::build_packet(Txn *txn,
     header.payload_size = payload_size;
     header.local_offset = local_offset;
     header.remote_offset = remote_offset;
+    header.network_enter_cycle = 0;
+    header.network_exit_cycle = 0;
 
     std::unique_ptr<OutgoingPacket> packet(new OutgoingPacket());
     packet->txn = txn;
@@ -369,6 +394,7 @@ bool VelocityDma::send_packet(std::unique_ptr<OutgoingPacket> packet)
 
 bool VelocityDma::issue_packet(OutgoingPacket *packet)
 {
+    this->stamp_latency_probe_enter(packet);
     vp::IoReqStatus status = this->remote_out_itf.req(&packet->req);
     if (status == vp::IO_REQ_OK)
     {
@@ -434,6 +460,11 @@ void VelocityDma::complete_packet(OutgoingPacket *packet, vp::IoReqStatus status
         }
         this->schedule_completion(holder->txn, latency);
     }
+    else if (holder->txn && holder->phase == REMOTE_PHASE_LATENCY_PROBE)
+    {
+        this->record_latency_probe(holder.get());
+        this->schedule_completion(holder->txn, 0);
+    }
 }
 
 void VelocityDma::schedule_remote_write_response(Txn *txn, vp::IoReq *req, uint64_t cycles)
@@ -476,6 +507,35 @@ bool VelocityDma::submit_remote_read_resp(uint32_t dst_cluster, uint32_t txn_id,
     header->txn_id = txn_id;
 
     return this->schedule_packet_send(std::move(packet), latency);
+}
+
+bool VelocityDma::submit_latency_probe(Txn *txn)
+{
+    std::unique_ptr<OutgoingPacket> packet = this->build_packet(txn, txn->remote_cluster,
+        REMOTE_PHASE_LATENCY_PROBE, 0, 0, 0, NULL, 0);
+    return this->send_packet(std::move(packet));
+}
+
+void VelocityDma::stamp_latency_probe_enter(OutgoingPacket *packet)
+{
+    if (packet->phase != REMOTE_PHASE_LATENCY_PROBE)
+    {
+        return;
+    }
+
+    RemoteHeader *header = (RemoteHeader *)packet->data.data();
+    header->network_enter_cycle = this->clock.get_cycles();
+    header->network_exit_cycle = 0;
+}
+
+void VelocityDma::record_latency_probe(OutgoingPacket *packet)
+{
+    RemoteHeader *header = (RemoteHeader *)packet->data.data();
+    this->last_probe_dst = header->dst_cluster;
+    this->last_probe_enter_cycle = header->network_enter_cycle;
+    this->last_probe_exit_cycle = header->network_exit_cycle;
+    this->last_probe_latency = header->network_exit_cycle >= header->network_enter_cycle ?
+        header->network_exit_cycle - header->network_enter_cycle : 0;
 }
 
 void VelocityDma::finish_txn(Txn *txn, uint32_t status, uint32_t error)
@@ -556,9 +616,13 @@ void VelocityDma::launch_txn(uint32_t requested_id)
         ok = this->local_access(txn, txn->local_offset, txn->size, txn->buffer.data(), false, latency) &&
              this->submit_remote_write(txn, latency);
     }
-    else
+    else if (txn->type == DMA_TYPE_READ)
     {
         ok = this->submit_remote_read_req(txn, latency);
+    }
+    else
+    {
+        ok = this->submit_latency_probe(txn);
     }
 
     if (!ok)
@@ -642,6 +706,13 @@ vp::IoReqStatus VelocityDma::regs_req(vp::Block *__this, vp::IoReq *req)
             case REG_STATUS:         ok = _this->read_u32(req, _this->get_status(_this->query_id_reg)); break;
             case REG_DONE_ID:        ok = _this->read_u32(req, _this->done_id_reg); break;
             case REG_ERROR:          ok = _this->read_u32(req, _this->last_error); break;
+            case REG_PROBE_ENTER_LO: ok = _this->read_u32(req, _this->last_probe_enter_cycle & 0xffffffff); break;
+            case REG_PROBE_ENTER_HI: ok = _this->read_u32(req, _this->last_probe_enter_cycle >> 32); break;
+            case REG_PROBE_EXIT_LO:  ok = _this->read_u32(req, _this->last_probe_exit_cycle & 0xffffffff); break;
+            case REG_PROBE_EXIT_HI:  ok = _this->read_u32(req, _this->last_probe_exit_cycle >> 32); break;
+            case REG_PROBE_LAT_LO:   ok = _this->read_u32(req, _this->last_probe_latency & 0xffffffff); break;
+            case REG_PROBE_LAT_HI:   ok = _this->read_u32(req, _this->last_probe_latency >> 32); break;
+            case REG_PROBE_DST:      ok = _this->read_u32(req, _this->last_probe_dst); break;
             default:
                 ok = false;
                 break;
@@ -758,6 +829,19 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
 
             _this->schedule_remote_write_response(txn, req, latency);
             return vp::IO_REQ_PENDING;
+        }
+
+        case REMOTE_PHASE_LATENCY_PROBE:
+        {
+            if (req->get_size() != sizeof(RemoteHeader) || header.payload_size != 0)
+            {
+                _this->last_error = DMA_ERROR_BAD_SIZE;
+                return vp::IO_REQ_INVALID;
+            }
+
+            header.network_exit_cycle = _this->clock.get_cycles();
+            memcpy(req->get_data(), &header, sizeof(RemoteHeader));
+            return vp::IO_REQ_OK;
         }
 
         default:
