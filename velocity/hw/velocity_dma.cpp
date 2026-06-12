@@ -25,6 +25,8 @@
 #include <vp/vp.hpp>
 #include <vp/itf/io.hpp>
 
+#include "packet_trace.hpp"
+
 namespace {
 
 constexpr uint64_t REG_REMOTE_CLUSTER = 0x00;
@@ -96,6 +98,29 @@ struct RemoteHeader
 
 constexpr uint32_t REMOTE_MAGIC = 0x56444d41; // "VDMA"
 
+const char *dma_type_name(uint32_t type)
+{
+    switch (type)
+    {
+        case DMA_TYPE_READ: return "read";
+        case DMA_TYPE_WRITE: return "write";
+        case DMA_TYPE_LATENCY_PROBE: return "latency_probe";
+        default: return "unknown";
+    }
+}
+
+const char *dma_status_name(uint32_t status)
+{
+    switch (status)
+    {
+        case DMA_STATUS_IDLE: return "idle";
+        case DMA_STATUS_BUSY: return "busy";
+        case DMA_STATUS_DONE: return "done";
+        case DMA_STATUS_ERROR: return "error";
+        default: return "unknown";
+    }
+}
+
 } // namespace
 
 class VelocityDma : public vp::Component
@@ -146,10 +171,11 @@ private:
     uint32_t allocate_txn_id();
     uint32_t get_status(uint32_t txn_id);
     bool validate_common(Txn *txn);
-    bool local_access(Txn *txn, uint32_t offset, uint32_t size, uint8_t *data, bool is_write, uint64_t &latency);
-    std::unique_ptr<OutgoingPacket> build_packet(Txn *txn, uint32_t dst_cluster, uint32_t phase,
-        uint32_t local_offset, uint32_t remote_offset, uint32_t payload_size, uint8_t *payload,
-        uint64_t completion_latency);
+    bool local_access(Txn *txn, const char *context, uint32_t offset, uint32_t size, uint8_t *data,
+        bool is_write, uint64_t &latency);
+    std::unique_ptr<OutgoingPacket> build_packet(Txn *txn, uint32_t packet_id, uint32_t dst_cluster,
+        uint32_t phase, uint32_t local_offset, uint32_t remote_offset, uint32_t payload_size,
+        uint8_t *payload, uint64_t completion_latency);
     bool send_packet(std::unique_ptr<OutgoingPacket> packet);
     bool issue_packet(OutgoingPacket *packet);
     bool schedule_packet_send(std::unique_ptr<OutgoingPacket> packet, uint64_t cycles);
@@ -333,11 +359,23 @@ bool VelocityDma::validate_common(Txn *txn)
     return true;
 }
 
-bool VelocityDma::local_access(Txn *txn, uint32_t offset, uint32_t size, uint8_t *data, bool is_write, uint64_t &latency)
+bool VelocityDma::local_access(Txn *txn, const char *context, uint32_t offset, uint32_t size,
+    uint8_t *data, bool is_write, uint64_t &latency)
 {
+    uint32_t packet_id = txn ? txn->id : 0;
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][TCDM]: req_begin context=%s addr=0x%x size=%u is_write=%d\n",
+        packet_id, context, offset, size, is_write);
+
     vp::IoReq req(offset, data, size, is_write);
+    req.set_initiator(packet_id);
     vp::IoReqStatus status = this->tcdm_itf.req(&req);
     latency += req.get_full_latency();
+
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][TCDM]: req_end context=%s addr=0x%x size=%u is_write=%d status=%s latency=%llu\n",
+        packet_id, context, offset, size, is_write, velocity::io_status_name(status),
+        (unsigned long long)req.get_full_latency());
 
     if (status != vp::IO_REQ_OK)
     {
@@ -348,15 +386,15 @@ bool VelocityDma::local_access(Txn *txn, uint32_t offset, uint32_t size, uint8_t
     return true;
 }
 
-std::unique_ptr<VelocityDma::OutgoingPacket> VelocityDma::build_packet(Txn *txn, uint32_t dst_cluster,
-    uint32_t phase, uint32_t local_offset, uint32_t remote_offset, uint32_t payload_size,
-    uint8_t *payload, uint64_t completion_latency)
+std::unique_ptr<VelocityDma::OutgoingPacket> VelocityDma::build_packet(Txn *txn, uint32_t packet_id,
+    uint32_t dst_cluster, uint32_t phase, uint32_t local_offset, uint32_t remote_offset,
+    uint32_t payload_size, uint8_t *payload, uint64_t completion_latency)
 {
     RemoteHeader header;
     header.magic = REMOTE_MAGIC;
     header.dst_cluster = dst_cluster;
     header.src_cluster = this->cluster_id;
-    header.txn_id = txn ? txn->id : 0;
+    header.txn_id = packet_id;
     header.phase = phase;
     header.payload_size = payload_size;
     header.local_offset = local_offset;
@@ -376,6 +414,11 @@ std::unique_ptr<VelocityDma::OutgoingPacket> VelocityDma::build_packet(Txn *txn,
         memcpy(packet->data.data() + sizeof(RemoteHeader), payload, payload_size);
     }
 
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: build phase=%s src=%u dst=%u local_offset=0x%x remote_offset=0x%x payload_size=%u packet_size=%u\n",
+        header.txn_id, velocity::packet_phase_name(phase), header.src_cluster, header.dst_cluster,
+        local_offset, remote_offset, payload_size, (uint32_t)packet->data.size());
+
     return packet;
 }
 
@@ -388,6 +431,12 @@ bool VelocityDma::send_packet(std::unique_ptr<OutgoingPacket> packet)
     raw->req.set_size(raw->data.size());
     raw->req.set_is_write(true);
 
+    RemoteHeader *header = (RemoteHeader *)raw->data.data();
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: send_prepare phase=%s src=%u dst=%u addr=0x%llx packet_size=%u\n",
+        header->txn_id, velocity::packet_phase_name(header->phase), header->src_cluster,
+        header->dst_cluster, (unsigned long long)raw->req.get_addr(), (uint32_t)raw->req.get_size());
+
     this->remote_pending[&raw->req] = std::move(packet);
     return this->issue_packet(raw);
 }
@@ -395,7 +444,19 @@ bool VelocityDma::send_packet(std::unique_ptr<OutgoingPacket> packet)
 bool VelocityDma::issue_packet(OutgoingPacket *packet)
 {
     this->stamp_latency_probe_enter(packet);
+    RemoteHeader *header = (RemoteHeader *)packet->data.data();
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: send_issue phase=%s src=%u dst=%u addr=0x%llx packet_size=%u\n",
+        header->txn_id, velocity::packet_phase_name(header->phase), header->src_cluster,
+        header->dst_cluster, (unsigned long long)packet->req.get_addr(), (uint32_t)packet->req.get_size());
+
     vp::IoReqStatus status = this->remote_out_itf.req(&packet->req);
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: send_status phase=%s src=%u dst=%u status=%s full_latency=%llu\n",
+        header->txn_id, velocity::packet_phase_name(header->phase), header->src_cluster,
+        header->dst_cluster, velocity::io_status_name(status),
+        (unsigned long long)packet->req.get_full_latency());
+
     if (status == vp::IO_REQ_OK)
     {
         this->complete_packet(packet, vp::IO_REQ_OK, true);
@@ -412,6 +473,12 @@ bool VelocityDma::issue_packet(OutgoingPacket *packet)
 
 bool VelocityDma::schedule_packet_send(std::unique_ptr<OutgoingPacket> packet, uint64_t cycles)
 {
+    RemoteHeader *header = (RemoteHeader *)packet->data.data();
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: schedule_send phase=%s src=%u dst=%u delay=%llu\n",
+        header->txn_id, velocity::packet_phase_name(header->phase), header->src_cluster,
+        header->dst_cluster, (unsigned long long)cycles);
+
     if (cycles == 0)
     {
         return this->send_packet(std::move(packet));
@@ -437,6 +504,13 @@ void VelocityDma::complete_packet(OutgoingPacket *packet, vp::IoReqStatus status
 
     std::unique_ptr<OutgoingPacket> holder = std::move(it->second);
     this->remote_pending.erase(it);
+
+    RemoteHeader *header = (RemoteHeader *)holder->data.data();
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: send_complete phase=%s src=%u dst=%u status=%s synchronous=%d full_latency=%llu\n",
+        header->txn_id, velocity::packet_phase_name(header->phase), header->src_cluster,
+        header->dst_cluster, velocity::io_status_name(status), synchronous,
+        (unsigned long long)holder->req.get_full_latency());
 
     if (status != vp::IO_REQ_OK)
     {
@@ -469,6 +543,15 @@ void VelocityDma::complete_packet(OutgoingPacket *packet, vp::IoReqStatus status
 
 void VelocityDma::schedule_remote_write_response(Txn *txn, vp::IoReq *req, uint64_t cycles)
 {
+    velocity::PacketTraceInfo info;
+    if (velocity::packet_trace_decode(req, info))
+    {
+        this->trace.msg(vp::Trace::LEVEL_TRACE,
+            "[%9u][DMA]: schedule_remote_response phase=%s src=%u dst=%u delay=%llu\n",
+            info.packet_id, velocity::packet_phase_name(info.phase), info.src_cluster, info.dst_cluster,
+            (unsigned long long)(cycles + this->base_latency));
+    }
+
     std::unique_ptr<PendingRemoteWrite> pending(new PendingRemoteWrite());
     PendingRemoteWrite *raw = pending.get();
 
@@ -484,34 +567,32 @@ void VelocityDma::schedule_remote_write_response(Txn *txn, vp::IoReq *req, uint6
 
 bool VelocityDma::submit_remote_write(Txn *txn, uint64_t latency)
 {
-    std::unique_ptr<OutgoingPacket> packet = this->build_packet(txn, txn->remote_cluster,
-        REMOTE_PHASE_WRITE, txn->local_offset, txn->remote_offset, txn->size, txn->buffer.data(),
-        0);
+    std::unique_ptr<OutgoingPacket> packet = this->build_packet(txn, txn->id, txn->remote_cluster,
+        REMOTE_PHASE_WRITE, txn->local_offset, txn->remote_offset, txn->size,
+        txn->buffer.data(), 0);
     return this->schedule_packet_send(std::move(packet), latency);
 }
 
 bool VelocityDma::submit_remote_read_req(Txn *txn, uint64_t latency)
 {
-    std::unique_ptr<OutgoingPacket> packet = this->build_packet(txn, txn->remote_cluster,
-        REMOTE_PHASE_READ_REQ, txn->local_offset, txn->remote_offset, txn->size, NULL, latency);
+    std::unique_ptr<OutgoingPacket> packet = this->build_packet(txn, txn->id, txn->remote_cluster,
+        REMOTE_PHASE_READ_REQ, txn->local_offset, txn->remote_offset, txn->size, NULL,
+        latency);
     return this->send_packet(std::move(packet));
 }
 
 bool VelocityDma::submit_remote_read_resp(uint32_t dst_cluster, uint32_t txn_id, uint32_t local_offset,
     uint32_t remote_offset, uint32_t size, uint8_t *payload, uint64_t latency)
 {
-    std::unique_ptr<OutgoingPacket> packet = this->build_packet(NULL, dst_cluster,
+    std::unique_ptr<OutgoingPacket> packet = this->build_packet(NULL, txn_id, dst_cluster,
         REMOTE_PHASE_READ_RESP, local_offset, remote_offset, size, payload, latency);
-
-    RemoteHeader *header = (RemoteHeader *)packet->data.data();
-    header->txn_id = txn_id;
 
     return this->schedule_packet_send(std::move(packet), latency);
 }
 
 bool VelocityDma::submit_latency_probe(Txn *txn)
 {
-    std::unique_ptr<OutgoingPacket> packet = this->build_packet(txn, txn->remote_cluster,
+    std::unique_ptr<OutgoingPacket> packet = this->build_packet(txn, txn->id, txn->remote_cluster,
         REMOTE_PHASE_LATENCY_PROBE, 0, 0, 0, NULL, 0);
     return this->send_packet(std::move(packet));
 }
@@ -526,6 +607,10 @@ void VelocityDma::stamp_latency_probe_enter(OutgoingPacket *packet)
     RemoteHeader *header = (RemoteHeader *)packet->data.data();
     header->network_enter_cycle = this->clock.get_cycles();
     header->network_exit_cycle = 0;
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: latency_probe_enter phase=%s src=%u dst=%u enter_cycle=%llu\n",
+        header->txn_id, velocity::packet_phase_name(header->phase), header->src_cluster,
+        header->dst_cluster, (unsigned long long)header->network_enter_cycle);
 }
 
 void VelocityDma::record_latency_probe(OutgoingPacket *packet)
@@ -536,10 +621,19 @@ void VelocityDma::record_latency_probe(OutgoingPacket *packet)
     this->last_probe_exit_cycle = header->network_exit_cycle;
     this->last_probe_latency = header->network_exit_cycle >= header->network_enter_cycle ?
         header->network_exit_cycle - header->network_enter_cycle : 0;
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: latency_probe_record phase=%s src=%u dst=%u latency=%llu\n",
+        header->txn_id, velocity::packet_phase_name(header->phase), header->src_cluster,
+        header->dst_cluster, (unsigned long long)this->last_probe_latency);
 }
 
 void VelocityDma::finish_txn(Txn *txn, uint32_t status, uint32_t error)
 {
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: finish_txn type=%s src=%u dst=%u size=%u status=%s error=%u\n",
+        txn->id, dma_type_name(txn->type), this->cluster_id, txn->remote_cluster, txn->size,
+        dma_status_name(status), error);
+
     txn->status = status;
     txn->error = error;
     this->last_error = error;
@@ -602,6 +696,11 @@ void VelocityDma::launch_txn(uint32_t requested_id)
     this->txn_id_reg = id;
     this->last_error = DMA_ERROR_NONE;
 
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: launch type=%s src=%u dst=%u local_offset=0x%x remote_offset=0x%x size=%u\n",
+        txn->id, dma_type_name(txn->type), this->cluster_id, txn->remote_cluster,
+        txn->local_offset, txn->remote_offset, txn->size);
+
     if (!this->validate_common(txn))
     {
         this->finish_txn(txn, DMA_STATUS_ERROR, txn->error);
@@ -613,7 +712,8 @@ void VelocityDma::launch_txn(uint32_t requested_id)
 
     if (txn->type == DMA_TYPE_WRITE)
     {
-        ok = this->local_access(txn, txn->local_offset, txn->size, txn->buffer.data(), false, latency) &&
+        ok = this->local_access(txn, "tcdm_to_dma", txn->local_offset, txn->size,
+                txn->buffer.data(), false, latency) &&
              this->submit_remote_write(txn, latency);
     }
     else if (txn->type == DMA_TYPE_READ)
@@ -747,6 +847,11 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
         return vp::IO_REQ_INVALID;
     }
 
+    _this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: rx_packet phase=%s src=%u dst=%u payload_size=%u packet_size=%u\n",
+        header.txn_id, velocity::packet_phase_name(header.phase), header.src_cluster,
+        header.dst_cluster, header.payload_size, (uint32_t)req->get_size());
+
     switch (header.phase)
     {
         case REMOTE_PHASE_WRITE:
@@ -760,7 +865,17 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
 
             vp::IoReq tcdm_req(header.remote_offset, req->get_data() + sizeof(RemoteHeader),
                 header.payload_size, true);
+            tcdm_req.set_initiator(header.txn_id);
+            _this->trace.msg(vp::Trace::LEVEL_TRACE,
+                "[%9u][TCDM]: req_begin context=remote_dma_to_tcdm addr=0x%x size=%u is_write=1\n",
+                header.txn_id, header.remote_offset, header.payload_size);
+
             vp::IoReqStatus status = _this->tcdm_itf.req(&tcdm_req);
+            _this->trace.msg(vp::Trace::LEVEL_TRACE,
+                "[%9u][TCDM]: req_end context=remote_dma_to_tcdm addr=0x%x size=%u is_write=1 status=%s latency=%llu\n",
+                header.txn_id, header.remote_offset, header.payload_size,
+                velocity::io_status_name(status), (unsigned long long)tcdm_req.get_full_latency());
+
             if (status != vp::IO_REQ_OK)
             {
                 _this->last_error = DMA_ERROR_LOCAL_ACCESS;
@@ -785,7 +900,14 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
             uint64_t latency = 0;
             Txn scratch;
             scratch.error = DMA_ERROR_NONE;
-            if (!_this->local_access(&scratch, header.remote_offset, header.payload_size,
+            scratch.id = header.txn_id;
+            scratch.type = DMA_TYPE_READ;
+            scratch.remote_cluster = header.src_cluster;
+            scratch.local_offset = header.remote_offset;
+            scratch.remote_offset = header.local_offset;
+            scratch.size = header.payload_size;
+            scratch.status = DMA_STATUS_BUSY;
+            if (!_this->local_access(&scratch, "remote_tcdm_to_dma", header.remote_offset, header.payload_size,
                 buffer.data(), false, latency))
             {
                 _this->last_error = scratch.error;
@@ -820,7 +942,7 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
 
             Txn *txn = it->second.get();
             uint64_t latency = 0;
-            if (!_this->local_access(txn, header.remote_offset, header.payload_size,
+            if (!_this->local_access(txn, "dma_to_tcdm", header.remote_offset, header.payload_size,
                 req->get_data() + sizeof(RemoteHeader), true, latency))
             {
                 _this->finish_txn(txn, DMA_STATUS_ERROR, txn->error);
@@ -841,6 +963,11 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
 
             header.network_exit_cycle = _this->clock.get_cycles();
             memcpy(req->get_data(), &header, sizeof(RemoteHeader));
+            _this->trace.msg(vp::Trace::LEVEL_TRACE,
+                "[%9u][DMA]: latency_probe_exit phase=%s src=%u dst=%u enter_cycle=%llu exit_cycle=%llu\n",
+                header.txn_id, velocity::packet_phase_name(header.phase), header.src_cluster,
+                header.dst_cluster, (unsigned long long)header.network_enter_cycle,
+                (unsigned long long)header.network_exit_cycle);
             return vp::IO_REQ_OK;
         }
 
@@ -860,7 +987,11 @@ void VelocityDma::remote_grant(vp::Block *__this, vp::IoReq *req)
         return;
     }
 
-    _this->issue_packet(it->second.get());
+    RemoteHeader *header = (RemoteHeader *)it->second->data.data();
+    _this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: send_grant phase=%s src=%u dst=%u\n",
+        header->txn_id, velocity::packet_phase_name(header->phase), header->src_cluster,
+        header->dst_cluster);
 }
 
 void VelocityDma::remote_resp(vp::Block *__this, vp::IoReq *req)
@@ -872,6 +1003,12 @@ void VelocityDma::remote_resp(vp::Block *__this, vp::IoReq *req)
         _this->last_error = DMA_ERROR_REMOTE_ACCESS;
         return;
     }
+
+    RemoteHeader *header = (RemoteHeader *)it->second->data.data();
+    _this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: send_response phase=%s src=%u dst=%u status=%s\n",
+        header->txn_id, velocity::packet_phase_name(header->phase), header->src_cluster,
+        header->dst_cluster, velocity::io_status_name(req->status));
 
     _this->complete_packet(it->second.get(), req->status, false);
 }
@@ -889,6 +1026,11 @@ void VelocityDma::send_packet_event(vp::Block *__this, vp::ClockEvent *event)
 
     std::unique_ptr<OutgoingPacket> holder = std::move(it->second);
     _this->delayed_packets.erase(it);
+    RemoteHeader *header = (RemoteHeader *)holder->data.data();
+    _this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: scheduled_send_fire phase=%s src=%u dst=%u\n",
+        header->txn_id, velocity::packet_phase_name(header->phase), header->src_cluster,
+        header->dst_cluster);
     _this->send_packet(std::move(holder));
 }
 
@@ -906,6 +1048,14 @@ void VelocityDma::remote_write_event(vp::Block *__this, vp::ClockEvent *event)
     std::unique_ptr<PendingRemoteWrite> holder = std::move(it->second);
     _this->pending_remote_writes.erase(it);
 
+    velocity::PacketTraceInfo info;
+    if (velocity::packet_trace_decode(holder->req, info))
+    {
+        _this->trace.msg(vp::Trace::LEVEL_TRACE,
+            "[%9u][DMA]: remote_response phase=%s src=%u dst=%u status=ok\n",
+            info.packet_id, velocity::packet_phase_name(info.phase), info.src_cluster, info.dst_cluster);
+    }
+
     if (holder->txn)
     {
         _this->finish_txn(holder->txn, DMA_STATUS_DONE, DMA_ERROR_NONE);
@@ -919,6 +1069,9 @@ void VelocityDma::complete_event(vp::Block *__this, vp::ClockEvent *event)
 {
     VelocityDma *_this = (VelocityDma *)__this;
     Txn *txn = (Txn *)event->get_args()[0];
+    _this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: completion_fire type=%s\n",
+        txn->id, dma_type_name(txn->type));
     _this->finish_txn(txn, DMA_STATUS_DONE, DMA_ERROR_NONE);
 }
 

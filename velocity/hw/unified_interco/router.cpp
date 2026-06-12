@@ -209,19 +209,15 @@ void UnifiedRouter::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
     for (int output_id = 0; output_id < _this->radix; output_id++)
     {
         OutputPort &output = _this->outputs[output_id];
-        if (!output.stalled && output.pending.empty())
+        if (output.stalled || output.pending.empty())
         {
             continue;
         }
 
-        vp::IoReq *req = output.stalled_req;
-        if (!output.stalled)
-        {
-            QueuedReq queued = output.pending.front();
-            output.pending.pop_front();
-            req = queued.req;
-            req->arg_push((void *)req->get_resp_port());
-        }
+        QueuedReq queued = output.pending.front();
+        output.pending.pop_front();
+        vp::IoReq *req = queued.req;
+        req->arg_push((void *)req->get_resp_port());
 
         _this->outstanding.insert(req);
         vp::IoReqStatus status = _this->output_itfs[output_id].req(req);
@@ -272,6 +268,8 @@ void UnifiedRouter::grant(vp::Block *__this, vp::IoReq *req, int port)
     OutputPort &output = _this->outputs[port];
     if (output.stalled_req == req)
     {
+        output.stalled = false;
+        output.stalled_req = nullptr;
         _this->schedule();
     }
 }

@@ -19,10 +19,10 @@ import pulp.snitch.snitch_core as iss
 import memory.memory as memory
 import interco.router as router
 import gvsoc.systree
-from pulp.snitch.snitch_cluster.dma_interleaver import DmaInterleaver
 from pulp.snitch.zero_mem import ZeroMem
 from elftools.elf.elffile import *
 from pulp.cluster.l1_interleaver import L1_interleaver
+from pulp.chips.velocity.dma_converter import DmaConverter
 from pulp.chips.velocity.velocity_dma import VelocityDma
 import gvsoc.runner
 import math
@@ -103,21 +103,28 @@ class ClusterTcdm(gvsoc.systree.Component):
         banks = []
         nb_banks = arch.num_lane
         bank_size = (arch.tcdm_size / arch.num_lane) + arch.lane_width
-        nb_masters = 2 + arch.num_lane
+        nb_masters = 1 + arch.num_lane
         for i in range(0, nb_banks):
             banks.append(memory.Memory(self, f'bank_{i}', size=bank_size, atomics=True, width_log2=int(math.log2(arch.lane_width))))
 
         interleaver = L1_interleaver(self, 'interleaver', nb_slaves=nb_banks,
             nb_masters=nb_masters, interleaving_bits=int(math.log2(arch.lane_width)))
+        dma_converter = DmaConverter(self, 'dma_converter', nb_banks=nb_banks,
+            interleaving_bits=int(math.log2(arch.lane_width)))
 
         for i in range(0, nb_banks):
             self.bind(interleaver, 'out_%d' % i, banks[i], 'input')
+            dma_converter.o_BANK(i, banks[i].i_INPUT())
 
         for i in range(0, nb_masters):
             self.bind(self, f'in_{i}', interleaver, f'in_{i}')
+        self.bind(self, 'dma', dma_converter, 'input')
 
     def i_INPUT(self, port: int) -> gvsoc.systree.SlaveItf:
         return gvsoc.systree.SlaveItf(self, f'in_{port}', signature='io')
+
+    def i_DMA(self) -> gvsoc.systree.SlaveItf:
+        return gvsoc.systree.SlaveItf(self, 'dma', signature='io')
 
 
 
@@ -202,7 +209,7 @@ class ClusterUnit(gvsoc.systree.Component):
         core_ico.o_MAP(stack_mem.i_INPUT(),            base=arch.stack_base,   size=arch.stack_size,   rm_base=True)
         core_ico.o_MAP(tcdm.i_INPUT(arch.num_lane),    base=arch.tcdm_base,    size=arch.tcdm_size,    rm_base=True)
         core_ico.o_MAP(dma.i_REGS(),                   base=arch.reg_base + arch.dma_reg_offset, size=arch.dma_reg_size, rm_base=True)
-        dma.o_TCDM(tcdm.i_INPUT(arch.num_lane + 1))
+        dma.o_TCDM(tcdm.i_DMA())
         self.bind(dma, 'remote_out', self, 'dma_remote_out')
         self.bind(self, 'dma_remote_in', dma, 'remote_in')
 

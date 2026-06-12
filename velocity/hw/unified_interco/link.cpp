@@ -122,28 +122,25 @@ void UnifiedLink::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
     UnifiedLink *_this = (UnifiedLink *)__this;
     int64_t cycles = _this->clock.get_cycles();
 
-    if (_this->stalled_req == nullptr && _this->pending.empty())
+    if (_this->stalled_req != nullptr || _this->pending.empty())
     {
         return;
     }
 
-    vp::IoReq *req = _this->stalled_req;
-    if (req == nullptr)
+    PendingReq pending = _this->pending.front();
+    int64_t ready_cycle = pending.ready_cycle > _this->next_send_cycle ? pending.ready_cycle : _this->next_send_cycle;
+    if (cycles < ready_cycle)
     {
-        PendingReq pending = _this->pending.front();
-        int64_t ready_cycle = pending.ready_cycle > _this->next_send_cycle ? pending.ready_cycle : _this->next_send_cycle;
-        if (cycles < ready_cycle)
-        {
-            _this->schedule(ready_cycle - cycles);
-            return;
-        }
-
-        _this->pending.pop_front();
-        _this->pending_size -= pending.req->get_size();
-        _this->grant_waiting_inputs();
-        req = pending.req;
-        req->arg_push((void *)req->get_resp_port());
+        _this->schedule(ready_cycle - cycles);
+        return;
     }
+
+    _this->pending.pop_front();
+    _this->pending_size -= pending.req->get_size();
+    _this->grant_waiting_inputs();
+
+    vp::IoReq *req = pending.req;
+    req->arg_push((void *)req->get_resp_port());
 
     _this->outstanding.insert(req);
     vp::IoReqStatus status = _this->output_itf.req(req);
@@ -183,7 +180,15 @@ void UnifiedLink::grant(vp::Block *__this, vp::IoReq *req)
     UnifiedLink *_this = (UnifiedLink *)__this;
     if (_this->stalled_req == req)
     {
-        _this->schedule();
+        _this->stalled_req = nullptr;
+        _this->next_send_cycle = _this->clock.get_cycles() + _this->transfer_cycles(req);
+        if (!_this->pending.empty())
+        {
+            int64_t cycles = _this->clock.get_cycles();
+            int64_t next_cycle = _this->pending.front().ready_cycle > _this->next_send_cycle ?
+                _this->pending.front().ready_cycle : _this->next_send_cycle;
+            _this->schedule(next_cycle - cycles);
+        }
     }
 }
 

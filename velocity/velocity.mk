@@ -46,5 +46,5 @@ run:
 	./install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary sw_build/velocity.elf run
 
 rund:
-	./install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary sw_build/velocity.elf run --trace-level=6 --trace=system/cluster_0/core/insn
-
+	mkdir -p sw_build
+	bash -o pipefail -c './install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary sw_build/velocity.elf run --trace-level=trace --trace=system/cluster_.*/dma/trace --trace=system/cluster_.*/tcdm/dma_converter/trace 2>&1 | tee sw_build/analyze_trace.txt'
