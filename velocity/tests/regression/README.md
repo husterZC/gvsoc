@@ -98,8 +98,9 @@ python3 velocity/tests/regression/run_matrix.py --mode smoke --progress line --c
 ```
 
 `JOBS=0` means one worker per selected test row. Set `JOBS=N` in the wrapper
-environment to cap row workers. The wrappers also accept `PROGRESS=auto|bar|line|off`
-and `COLOR=auto|always|never`.
+environment to cap row workers. Debug mode always uses one worker so selected
+test/topology cells execute serially. The wrappers also accept
+`PROGRESS=auto|bar|line|off` and `COLOR=auto|always|never`.
 
 Use `--run-target rund` to force traced simulator execution for any selected
 matrix cells.

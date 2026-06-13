@@ -23,15 +23,15 @@ class VelocityArch:
         #Cluster
         self.num_cluster                         = 128
 
-        self.cluster_num_lane                    = 32
+        self.cluster_num_lane                    = 512
         self.cluster_lane_width                  = 4
 
         self.dma_reg_offset                      = 0x00000100
         self.dma_reg_size                        = 0x00000100
-        self.dma_bus_width                       = 16
+        self.dma_bus_width                       = 256
         self.dma_read_buffer_size                = 4096
         self.dma_write_buffer_size               = 4096
-        self.dma_max_inflight_txn                = 16
+        self.dma_max_inflight_txn                = 256
         self.dma_base_latency                    = 1
         self.dma_cluster_stride                  = 0x00010000
 

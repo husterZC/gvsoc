@@ -368,14 +368,14 @@ def write_arch(path, topology_name, topology):
         '',
         '    def __init__(self):',
         arch_assignment('num_cluster', clusters),
-        arch_assignment('cluster_num_lane', 32),
+        arch_assignment('cluster_num_lane', 512),
         arch_assignment('cluster_lane_width', 4),
         arch_assignment('dma_reg_offset', '0x00000100'),
         arch_assignment('dma_reg_size', '0x00000100'),
-        arch_assignment('dma_bus_width', 16),
+        arch_assignment('dma_bus_width', 256),
         arch_assignment('dma_read_buffer_size', 4096),
         arch_assignment('dma_write_buffer_size', 4096),
-        arch_assignment('dma_max_inflight_txn', 16),
+        arch_assignment('dma_max_inflight_txn', 256),
         arch_assignment('dma_base_latency', 1),
         arch_assignment('dma_cluster_stride', '0x00010000'),
         arch_assignment('unified_interco', unified_interco),
@@ -687,7 +687,9 @@ def main():
     topologies = select_topologies(topology_manifest, args.mode, args.topology)
     tests = select_entries(test_manifest, args.mode, 'tests', args.test)
     run_target = args.run_target or ('rund' if args.mode == 'debug' else None)
-    row_workers = len(tests) if args.jobs <= 0 else max(1, min(args.jobs, len(tests)))
+    row_workers = 1 if args.mode == 'debug' else (
+        len(tests) if args.jobs <= 0 else max(1, min(args.jobs, len(tests)))
+    )
     queued_commands = max(2, len(tests) + 1)
 
     timestamp = time.strftime('%Y%m%d_%H%M%S')
