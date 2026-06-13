@@ -4,6 +4,7 @@
     "injection_rate",
     "zero_load_latency",
     "two_sided_test",
+    "software_collective_tree",
     "max_bandwidth_4B"
   ],
   "full": [
@@ -11,6 +12,7 @@
     "injection_rate",
     "zero_load_latency",
     "two_sided_test",
+    "software_collective_tree",
     "max_bandwidth_4B",
     "max_bandwidth_64B",
     "max_bandwidth_4096B"
@@ -42,6 +44,16 @@
       "app": "velocity/tests/topology_agnostic_tests/two_sided_test/sw",
       "pass_regex": "TWO_SIDED_RESULT PASS",
       "comment": "Native blocking send, recv, and sendrecv between cluster 0 and cluster n-1."
+    },
+    "software_collective_tree": {
+      "suite": "topology_agnostic_tests/software_collective_tree",
+      "app": "velocity/tests/topology_agnostic_tests/software_collective_tree/sw",
+      "pass_regex": "SOFTWARE_COLLECTIVE_TREE_RESULT PASS",
+      "cmake_defs": {
+        "SOFTWARE_COLLECTIVE_TREE_TEST_MAX_ALL_GROUP": 16,
+        "SOFTWARE_COLLECTIVE_TREE_TEST_MAX_SUBSET_GROUP": 8
+      },
+      "comment": "Tree-based logical collectives over native two-sided DMA."
     },
     "max_bandwidth_4B": {
       "suite": "topology_agnostic_tests/max_bandwidth",

@@ -9,6 +9,7 @@ row is a test type, and a regression column is a topology configuration.
 - `topology_agnostic_tests/injection_rate/sw`: all-to-all traffic with an injection-gap control point.
 - `topology_agnostic_tests/max_bandwidth/sw`: one-way DMA bandwidth transfer.
 - `topology_agnostic_tests/two_sided_test/sw`: native blocking DMA send, recv, and sendrecv checks.
+- `topology_agnostic_tests/software_collective_tree/sw`: logical tree collectives over two-sided DMA.
 - `topology_agnostic_tests/zero_load_latency/sw`: one probe from cluster 0 to each other active cluster.
 - `regression/`: topology/test manifests, shell entry points, and the Python matrix runner.
 
@@ -24,6 +25,7 @@ read_after_write              PASS              PASS           PASS
 injection_rate                PASS              PASS           PASS
 max_bandwidth_4B              PASS              PASS           PASS
 two_sided_test                PASS              PASS           PASS
+software_collective_tree      PASS              PASS           PASS
 zero_load_latency             PASS              PASS           PASS
 ```
 
@@ -64,6 +66,7 @@ shows one live progress bar per test type:
 [injection_rate       ] [mesh_2d_X2_Y2              ] [########--------------------]  28% [PASS:2 | FAIL:0] RUN
 [zero_load_latency    ] [mesh_2d_X2_Y2              ] [########--------------------]  28% [PASS:2 | FAIL:0] RUN
 [two_sided_test       ] [mesh_2d_X2_Y2              ] [########--------------------]  28% [PASS:2 | FAIL:0] RUN
+[software_collective_tree] [mesh_2d_X2_Y2           ] [########--------------------]  28% [PASS:2 | FAIL:0] RUN
 [max_bandwidth_4B     ] [mesh_2d_X2_Y2              ] [########--------------------]  28% [PASS:2 | FAIL:0] RUN
 ```
 

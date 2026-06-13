@@ -63,6 +63,25 @@ diff --git a/models/cpu/iss/include/isa/rv32v_timed.hpp b/models/cpu/iss/include
 index 0484774c..6d588802 100644
 --- a/models/cpu/iss/include/isa/rv32v_timed.hpp
 +++ b/models/cpu/iss/include/isa/rv32v_timed.hpp
+@@ -117,5 +117,17 @@ static inline iss_reg_t vadd_vv_exec(Iss *iss, iss_insn_t *insn, iss_reg_t pc)
+ static inline iss_reg_t vadd_vv_exec(Iss *iss, iss_insn_t *insn, iss_reg_t pc)
+ {
+-    abort();
++    unsigned int sewb = iss->vector.sewb;
++    unsigned int lmul = iss->vector.lmul;
++
++    for (unsigned int i=iss->csr.vstart.value; i<iss->csr.vl.value; i++)
++    {
++        if (velem_is_active(iss, i, UIM_GET(0)))
++        {
++            uint64_t in0 = velem_get_value(iss, REG_IN(0), i, sewb, lmul);
++            uint64_t in1 = velem_get_value(iss, REG_IN(1), i, sewb, lmul);
++            velem_set_value(iss, REG_OUT(0), i, sewb, in0 + in1);
++        }
++    }
++
+     return iss_insn_next(iss, insn, pc);
+ }
 @@ -1198,6 +1198,41 @@ static inline iss_reg_t vfadd_vv_exec(Iss *iss, iss_insn_t *insn, iss_reg_t pc)
      return iss_insn_next(iss, insn, pc);
  }
