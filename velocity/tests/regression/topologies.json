@@ -1,0 +1,30 @@
+{
+  "smoke": [
+    "flat_C2",
+    "fat_tree_K4_L1",
+    "mesh_2d_X2_Y2",
+    "torus_2d_X3_Y2_wrap",
+    "ring_N4",
+    "dragonfly_G2_A2_P1",
+    "hypercube_D2"
+  ],
+  "full": [
+    "flat_C2",
+    "fat_tree_K4_L1",
+    "mesh_2d_X2_Y2",
+    "mesh_3d_X2_Y2_Z2",
+    "torus_2d_X3_Y2_wrap",
+    "torus_3d_X2_Y2_Z2_wrap",
+    "ruche_2d_X4_Y2_H2",
+    "ruche_3d_X4_Y2_Z2_H2",
+    "hexa_mesh_X2_Y2",
+    "hexa_torus_X3_Y2_wrap",
+    "octa_mesh_X2_Y2",
+    "octa_torus_X3_Y2_wrap",
+    "ring_N4",
+    "tree_R2_L2",
+    "dragonfly_G2_A2_P1",
+    "hypercube_D2"
+  ],
+  "topologies": {}
+}

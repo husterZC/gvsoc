@@ -46,6 +46,20 @@ class VelocityArch:
         self.unified_interco_link_pending_size = self.dma_write_buffer_size
         self.unified_interco_router_pending_size = self.dma_write_buffer_size
 
+        # Shared topology parameters. Topology-specific files may override any
+        # of these. Tuple/list fields are used by Python topology builders and
+        # are intentionally ignored by velocity/utils/config.py C header export.
+        self.unified_interco_dims           = (16, 8)
+        self.unified_interco_hop            = 2
+        self.unified_interco_ring_size      = self.num_cluster
+        self.unified_interco_tree_radix     = self.unified_interco_radix
+        self.unified_interco_tree_level     = self.unified_interco_level
+        self.unified_interco_hypercube_dims = 7
+        self.unified_interco_dragonfly_groups = 8
+        self.unified_interco_dragonfly_routers_per_group = 16
+        self.unified_interco_dragonfly_terminals_per_router = 1
+        self.unified_interco_dragonfly_routing = "tree"
+
         self.cluster_tcdm_base       = 0x00000000
         self.cluster_tcdm_size       = 0x00100000
 

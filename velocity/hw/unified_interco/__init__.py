@@ -1,9 +1,45 @@
 from pulp.chips.velocity.unified_interco.fat_tree import FatTreeInterconnect
 from pulp.chips.velocity.unified_interco.link import UnifiedLink
 from pulp.chips.velocity.unified_interco.router import UnifiedRouter
+from pulp.chips.velocity.unified_interco.topologies import (
+    DragonflyInterconnect,
+    HexaMeshInterconnect,
+    HexaTorusInterconnect,
+    HypercubeInterconnect,
+    Mesh2DInterconnect,
+    Mesh3DInterconnect,
+    OctaMeshInterconnect,
+    OctaTorusInterconnect,
+    RingInterconnect,
+    Ruche2DInterconnect,
+    Ruche3DInterconnect,
+    TOPOLOGIES,
+    Torus2DInterconnect,
+    Torus3DInterconnect,
+    TreeInterconnect,
+    create_interconnect,
+    normalize_topology_name,
+)
 
 __all__ = [
+    'DragonflyInterconnect',
     'FatTreeInterconnect',
+    'HexaMeshInterconnect',
+    'HexaTorusInterconnect',
+    'HypercubeInterconnect',
     'UnifiedLink',
     'UnifiedRouter',
+    'Mesh2DInterconnect',
+    'Mesh3DInterconnect',
+    'OctaMeshInterconnect',
+    'OctaTorusInterconnect',
+    'RingInterconnect',
+    'Ruche2DInterconnect',
+    'Ruche3DInterconnect',
+    'TOPOLOGIES',
+    'Torus2DInterconnect',
+    'Torus3DInterconnect',
+    'TreeInterconnect',
+    'create_interconnect',
+    'normalize_topology_name',
 ]

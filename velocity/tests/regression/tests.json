@@ -1,0 +1,59 @@
+{
+  "smoke": [
+    "read_after_write",
+    "injection_rate",
+    "zero_load_latency",
+    "max_bandwidth_4B"
+  ],
+  "full": [
+    "read_after_write",
+    "injection_rate",
+    "zero_load_latency",
+    "max_bandwidth_4B",
+    "max_bandwidth_64B"
+  ],
+  "tests": {
+    "read_after_write": {
+      "suite": "topology_agnostic_tests/read_after_write",
+      "app": "velocity/tests/topology_agnostic_tests/read_after_write/sw",
+      "pass_regex": "READ_AFTER_WRITE_RESULT PASS",
+      "comment": "All clusters write to all other clusters, then validate the received data."
+    },
+    "injection_rate": {
+      "suite": "topology_agnostic_tests/injection_rate",
+      "app": "velocity/tests/topology_agnostic_tests/injection_rate/sw",
+      "pass_regex": "INJECTION_RATE_RESULT PASS",
+      "comment": "All-to-all traffic with an injection-gap control point."
+    },
+    "zero_load_latency": {
+      "suite": "topology_agnostic_tests/zero_load_latency",
+      "app": "velocity/tests/topology_agnostic_tests/zero_load_latency/sw",
+      "pass_regex": "ZERO_LOAD_LATENCY_RESULT PASS",
+      "comment": "One probe from cluster 0 to every other active cluster."
+    },
+    "max_bandwidth_4B": {
+      "suite": "topology_agnostic_tests/max_bandwidth",
+      "app": "velocity/tests/topology_agnostic_tests/max_bandwidth/sw",
+      "pass_regex": "MAX_BANDWIDTH_RESULT PASS",
+      "cmake_defs": {
+        "MAX_BANDWIDTH_TEST_TXN_SIZE": 4,
+        "MAX_BANDWIDTH_TEST_REPEAT": 4,
+        "MAX_BANDWIDTH_TEST_MAX_INFLIGHT": 2,
+        "MAX_BANDWIDTH_TEST_SLOTS": 2
+      },
+      "comment": "Small one-way bandwidth transfer."
+    },
+    "max_bandwidth_64B": {
+      "suite": "topology_agnostic_tests/max_bandwidth",
+      "app": "velocity/tests/topology_agnostic_tests/max_bandwidth/sw",
+      "pass_regex": "MAX_BANDWIDTH_RESULT PASS",
+      "cmake_defs": {
+        "MAX_BANDWIDTH_TEST_TXN_SIZE": 64,
+        "MAX_BANDWIDTH_TEST_REPEAT": 8,
+        "MAX_BANDWIDTH_TEST_MAX_INFLIGHT": 4,
+        "MAX_BANDWIDTH_TEST_SLOTS": 4
+      },
+      "comment": "Larger one-way bandwidth transfer."
+    }
+  }
+}

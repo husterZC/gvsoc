@@ -22,6 +22,8 @@ hw:
 ######################################################################
 
 sw_cmake_arg ?= ""
+sw_build_dir ?= sw_build
+sw_source_dir := $(abspath velocity/sw)
 ifdef app
 	app_path = $(abspath $(app))
 	sw_cmake_arg = "-DSRC_DIR=$(app_path)"
@@ -30,12 +32,12 @@ endif
 arch_cmake_arg := "-DRISCV_ARCH=rv32imafdv_zfh"
 
 sw:
-	rm -rf sw_build && mkdir sw_build
-	cd sw_build && $(CMAKE) $(sw_cmake_arg) $(arch_cmake_arg) ../velocity/sw/ && make
-	@! grep -q "ebreak" sw_build/velocity.dump || (echo "Error: 'ebreak' found in sw_build/velocity.dump" && exit 1)
+	rm -rf $(sw_build_dir) && mkdir -p $(sw_build_dir)
+	cd $(sw_build_dir) && $(CMAKE) $(sw_cmake_arg) $(arch_cmake_arg) $(sw_source_dir)/ && make
+	@! grep -q "ebreak" $(sw_build_dir)/velocity.dump || (echo "Error: 'ebreak' found in $(sw_build_dir)/velocity.dump" && exit 1)
 
 clean_sw:
-	rm -rf sw_build
+	rm -rf $(sw_build_dir)
 
 
 ######################################################################
@@ -43,8 +45,8 @@ clean_sw:
 ######################################################################
 
 run:
-	./install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary sw_build/velocity.elf run
+	./install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary $(sw_build_dir)/velocity.elf run
 
 rund:
-	mkdir -p sw_build
-	bash -o pipefail -c './install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary sw_build/velocity.elf run --trace-level=trace --trace=system/cluster_.*/dma/trace --trace=system/cluster_.*/tcdm/dma_converter/trace 2>&1 | tee sw_build/analyze_trace.txt'
+	mkdir -p $(sw_build_dir)
+	bash -o pipefail -c './install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary $(sw_build_dir)/velocity.elf run --trace-level=trace --trace=system/cluster_.*/dma/trace --trace=system/cluster_.*/tcdm/dma_converter/trace 2>&1 | tee $(sw_build_dir)/analyze_trace.txt'
