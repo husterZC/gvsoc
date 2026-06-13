@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
-#include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 #include <vp/vp.hpp>
@@ -52,7 +52,7 @@ private:
     std::vector<InputPort> inputs;
     std::vector<OutputPort> outputs;
     std::vector<int> routes;
-    std::unordered_set<vp::IoReq *> outstanding;
+    std::unordered_map<vp::IoReq *, vp::IoSlave *> outstanding;
     vp::ClockEvent fsm_event;
 
     int router_id;
@@ -241,16 +241,16 @@ void UnifiedRouter::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
         QueuedReq queued = output.pending.front();
         output.pending.pop_front();
         vp::IoReq *req = queued.req;
-        req->arg_push((void *)req->get_resp_port());
 
-        _this->outstanding.insert(req);
+        _this->outstanding[req] = req->get_resp_port();
         _this->trace.msg(vp::Trace::LEVEL_TRACE,
             "router=%d forward input=%d output=%d addr=0x%llx size=%u outstanding=%zu\n",
             _this->router_id, queued.input, output_id,
             (unsigned long long)req->get_addr(), (uint32_t)req->get_size(),
             _this->outstanding.size());
         vp::IoReqStatus status = _this->output_itfs[output_id].req(req);
-        bool completed = _this->outstanding.find(req) == _this->outstanding.end();
+        auto outstanding = _this->outstanding.find(req);
+        bool completed = outstanding == _this->outstanding.end();
 
         if (status == vp::IO_REQ_DENIED)
         {
@@ -272,8 +272,8 @@ void UnifiedRouter::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
             output.stalled_req = nullptr;
             if (!completed)
             {
-                _this->outstanding.erase(req);
-                req->resp_port = (vp::IoSlave *)req->arg_pop();
+                req->resp_port = outstanding->second;
+                _this->outstanding.erase(outstanding);
                 _this->finish_req(req, status);
             }
         }
@@ -314,12 +314,14 @@ void UnifiedRouter::grant(vp::Block *__this, vp::IoReq *req, int port)
 void UnifiedRouter::response(vp::Block *__this, vp::IoReq *req, int port)
 {
     UnifiedRouter *_this = (UnifiedRouter *)__this;
-    if (_this->outstanding.erase(req) == 0)
+    auto outstanding = _this->outstanding.find(req);
+    if (outstanding == _this->outstanding.end())
     {
         return;
     }
 
-    req->resp_port = (vp::IoSlave *)req->arg_pop();
+    req->resp_port = outstanding->second;
+    _this->outstanding.erase(outstanding);
     _this->trace.msg(vp::Trace::LEVEL_TRACE,
         "router=%d response port=%d addr=0x%llx size=%u outstanding=%zu\n",
         _this->router_id, port, (unsigned long long)req->get_addr(),

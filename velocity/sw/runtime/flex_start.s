@@ -88,9 +88,6 @@ init_global_pointer:
 
 
 init_stack:
-    # Get core id
-    csrr a0, mhartid
-
     # Calculate cluster's Stack start address
     lui a2, %hi(ARCH_CLUSTER_STACK_BASE)
     addi a2, a2, %lo(ARCH_CLUSTER_STACK_BASE)
@@ -100,12 +97,8 @@ init_stack:
 
     add  a2, a2, t1
 
-    # Compute the relative start address of the stack for each hart.
-    # The stack for hart N starts at the end of the stack of hart N-1.
-    sll  t0, a0, 0xa
-    
-    # Initialize the stack pointer to the start of the stack
-    sub  sp, a2, t0
+    # Each Velocity cluster owns a private local stack memory.
+    mv   sp, a2
 
 velocity.main:
     call main
@@ -114,5 +107,4 @@ velocity.end:
 1:
     wfi
     j       1b
-
 

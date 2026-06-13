@@ -1,7 +1,7 @@
 #include <climits>
 #include <cstdint>
 #include <deque>
-#include <unordered_set>
+#include <unordered_map>
 
 #include <vp/vp.hpp>
 #include <vp/itf/io.hpp>
@@ -36,7 +36,7 @@ private:
 
     std::deque<PendingReq> pending;
     std::deque<vp::IoReq *> denied;
-    std::unordered_set<vp::IoReq *> outstanding;
+    std::unordered_map<vp::IoReq *, vp::IoSlave *> outstanding;
     vp::IoReq *stalled_req = nullptr;
     int64_t pending_size = 0;
     int64_t max_pending_size;
@@ -155,15 +155,15 @@ void UnifiedLink::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
     _this->grant_waiting_inputs();
 
     vp::IoReq *req = pending.req;
-    req->arg_push((void *)req->get_resp_port());
 
-    _this->outstanding.insert(req);
+    _this->outstanding[req] = req->get_resp_port();
     _this->trace.msg(vp::Trace::LEVEL_TRACE,
         "link forward addr=0x%llx size=%u ready=%lld cycles=%lld outstanding=%zu\n",
         (unsigned long long)req->get_addr(), (uint32_t)req->get_size(),
         (long long)ready_cycle, (long long)cycles, _this->outstanding.size());
     vp::IoReqStatus status = _this->output_itf.req(req);
-    bool completed = _this->outstanding.find(req) == _this->outstanding.end();
+    auto outstanding = _this->outstanding.find(req);
+    bool completed = outstanding == _this->outstanding.end();
 
     if (status == vp::IO_REQ_DENIED)
     {
@@ -182,8 +182,8 @@ void UnifiedLink::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
         _this->stalled_req = nullptr;
         if (!completed)
         {
-            _this->outstanding.erase(req);
-            req->resp_port = (vp::IoSlave *)req->arg_pop();
+            req->resp_port = outstanding->second;
+            _this->outstanding.erase(outstanding);
             _this->next_send_cycle = cycles + _this->transfer_cycles(req);
             _this->finish_req(req, status);
         }
@@ -220,12 +220,14 @@ void UnifiedLink::grant(vp::Block *__this, vp::IoReq *req)
 void UnifiedLink::response(vp::Block *__this, vp::IoReq *req)
 {
     UnifiedLink *_this = (UnifiedLink *)__this;
-    if (_this->outstanding.erase(req) == 0)
+    auto outstanding = _this->outstanding.find(req);
+    if (outstanding == _this->outstanding.end())
     {
         return;
     }
 
-    req->resp_port = (vp::IoSlave *)req->arg_pop();
+    req->resp_port = outstanding->second;
+    _this->outstanding.erase(outstanding);
     _this->trace.msg(vp::Trace::LEVEL_TRACE,
         "link response addr=0x%llx size=%u outstanding=%zu\n",
         (unsigned long long)req->get_addr(), (uint32_t)req->get_size(),

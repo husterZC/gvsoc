@@ -337,13 +337,17 @@ bool VelocityDma::write_u32(vp::IoReq *req, uint32_t &reg)
 
 uint32_t VelocityDma::allocate_txn_id()
 {
-    for (uint32_t attempt = 0; attempt < CMD_TXN_ID_MASK; attempt++)
+    for (uint32_t attempt = 0; attempt < UINT32_MAX; attempt++)
     {
-        uint32_t id = this->next_txn_id++ & CMD_TXN_ID_MASK;
+        uint32_t id = this->next_txn_id++;
         if (id == 0)
         {
             this->next_txn_id = 1;
             continue;
+        }
+        if (this->next_txn_id == 0)
+        {
+            this->next_txn_id = 1;
         }
         if (this->txns.find(id) == this->txns.end())
         {
