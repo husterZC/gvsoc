@@ -48,6 +48,9 @@ constexpr uint64_t REG_PROBE_EXIT_HI  = 0x3c;
 constexpr uint64_t REG_PROBE_LAT_LO   = 0x40;
 constexpr uint64_t REG_PROBE_LAT_HI   = 0x44;
 constexpr uint64_t REG_PROBE_DST      = 0x48;
+constexpr uint64_t REG_TWO_SEND       = 0x4c;
+constexpr uint64_t REG_TWO_RECV       = 0x50;
+constexpr uint64_t REG_TWO_SENDRECV   = 0x54;
 
 constexpr uint32_t CMD_REMOTE_CLUSTER_MASK = 0x0000ffff;
 constexpr uint32_t CMD_TYPE_SHIFT = 16;
@@ -81,6 +84,7 @@ constexpr uint32_t REMOTE_PHASE_WRITE = 0;
 constexpr uint32_t REMOTE_PHASE_READ_REQ = 1;
 constexpr uint32_t REMOTE_PHASE_READ_RESP = 2;
 constexpr uint32_t REMOTE_PHASE_LATENCY_PROBE = 3;
+constexpr uint32_t REMOTE_PHASE_TWO_SEND = 4;
 
 struct RemoteHeader
 {
@@ -143,9 +147,12 @@ private:
         vp::ClockEvent *event;
     };
 
+    struct BlockingOp;
+
     struct OutgoingPacket
     {
         Txn *txn;
+        BlockingOp *blocking_op = NULL;
         uint32_t phase;
         uint32_t dst_cluster;
         uint64_t completion_latency;
@@ -160,12 +167,43 @@ private:
         vp::ClockEvent *event;
     };
 
+    struct BlockingOp
+    {
+        uint32_t packet_id;
+        uint32_t peer_cluster;
+        uint32_t send_offset;
+        uint32_t recv_offset;
+        uint32_t size;
+        bool wait_send;
+        bool wait_recv;
+        bool send_done;
+        bool recv_done;
+        uint32_t error;
+        vp::IoReq *regs_req;
+        std::vector<uint8_t> send_buffer;
+    };
+
+    struct PendingTwoSidedSend
+    {
+        uint32_t src_cluster;
+        uint32_t size;
+        vp::IoReq *req;
+    };
+
+    struct PendingTwoSidedRecv
+    {
+        BlockingOp *op;
+        vp::IoReq *remote_req;
+        vp::ClockEvent *event;
+    };
+
     static vp::IoReqStatus regs_req(vp::Block *__this, vp::IoReq *req);
     static vp::IoReqStatus remote_req(vp::Block *__this, vp::IoReq *req);
     static void remote_grant(vp::Block *__this, vp::IoReq *req);
     static void remote_resp(vp::Block *__this, vp::IoReq *req);
     static void send_packet_event(vp::Block *__this, vp::ClockEvent *event);
     static void remote_write_event(vp::Block *__this, vp::ClockEvent *event);
+    static void two_sided_recv_event(vp::Block *__this, vp::ClockEvent *event);
     static void complete_event(vp::Block *__this, vp::ClockEvent *event);
 
     uint32_t allocate_txn_id();
@@ -188,6 +226,16 @@ private:
     bool submit_latency_probe(Txn *txn);
     void stamp_latency_probe_enter(OutgoingPacket *packet);
     void record_latency_probe(OutgoingPacket *packet);
+    vp::IoReqStatus launch_two_sided(vp::IoReq *req, uint64_t command);
+    bool validate_two_sided(BlockingOp *op);
+    void post_two_sided_recv(BlockingOp *op);
+    void unpost_two_sided_recv(BlockingOp *op);
+    bool match_pending_two_sided_send(BlockingOp *op);
+    bool consume_two_sided_send(BlockingOp *op, vp::IoReq *remote_req);
+    bool start_two_sided_send(BlockingOp *op);
+    bool handle_two_sided_send(vp::IoReq *req, const RemoteHeader &header);
+    void schedule_two_sided_recv_completion(BlockingOp *op, vp::IoReq *remote_req, uint64_t cycles);
+    void complete_two_sided_op(BlockingOp *op);
     void finish_txn(Txn *txn, uint32_t status, uint32_t error);
     void launch_txn(uint32_t requested_id);
     void launch_packed_cmd(uint32_t cmd);
@@ -232,6 +280,10 @@ private:
     std::unordered_map<vp::IoReq *, std::unique_ptr<OutgoingPacket>> remote_pending;
     std::unordered_map<OutgoingPacket *, std::unique_ptr<OutgoingPacket>> delayed_packets;
     std::unordered_map<PendingRemoteWrite *, std::unique_ptr<PendingRemoteWrite>> pending_remote_writes;
+    std::unordered_map<BlockingOp *, std::unique_ptr<BlockingOp>> blocking_ops;
+    std::unordered_map<PendingTwoSidedRecv *, std::unique_ptr<PendingTwoSidedRecv>> pending_two_sided_recvs;
+    std::deque<BlockingOp *> posted_two_sided_recvs;
+    std::deque<PendingTwoSidedSend> pending_two_sided_sends;
 };
 
 VelocityDma::VelocityDma(vp::ComponentConf &config)
@@ -518,6 +570,12 @@ void VelocityDma::complete_packet(OutgoingPacket *packet, vp::IoReqStatus status
         {
             this->finish_txn(holder->txn, DMA_STATUS_ERROR, DMA_ERROR_REMOTE_ACCESS);
         }
+        else if (holder->blocking_op)
+        {
+            holder->blocking_op->error = DMA_ERROR_REMOTE_ACCESS;
+            holder->blocking_op->send_done = true;
+            this->complete_two_sided_op(holder->blocking_op);
+        }
         else
         {
             this->last_error = DMA_ERROR_REMOTE_ACCESS;
@@ -525,7 +583,12 @@ void VelocityDma::complete_packet(OutgoingPacket *packet, vp::IoReqStatus status
         return;
     }
 
-    if (holder->txn && holder->phase == REMOTE_PHASE_WRITE)
+    if (holder->blocking_op && holder->phase == REMOTE_PHASE_TWO_SEND)
+    {
+        holder->blocking_op->send_done = true;
+        this->complete_two_sided_op(holder->blocking_op);
+    }
+    else if (holder->txn && holder->phase == REMOTE_PHASE_WRITE)
     {
         uint64_t latency = holder->completion_latency;
         if (synchronous)
@@ -625,6 +688,285 @@ void VelocityDma::record_latency_probe(OutgoingPacket *packet)
         "[%9u][DMA]: latency_probe_record phase=%s src=%u dst=%u latency=%llu\n",
         header->txn_id, velocity::packet_phase_name(header->phase), header->src_cluster,
         header->dst_cluster, (unsigned long long)this->last_probe_latency);
+}
+
+bool VelocityDma::validate_two_sided(BlockingOp *op)
+{
+    if (op->peer_cluster >= this->num_cluster || op->peer_cluster == this->cluster_id)
+    {
+        op->error = DMA_ERROR_BAD_CLUSTER;
+        return false;
+    }
+    if (op->size == 0)
+    {
+        op->error = DMA_ERROR_BAD_SIZE;
+        return false;
+    }
+    if (op->wait_send && op->send_offset + op->size > this->tcdm_size)
+    {
+        op->error = DMA_ERROR_BAD_LOCAL_OFFSET;
+        return false;
+    }
+    if (op->wait_recv && op->recv_offset + op->size > this->tcdm_size)
+    {
+        op->error = DMA_ERROR_BAD_LOCAL_OFFSET;
+        return false;
+    }
+    if (op->wait_send && op->size > this->write_buffer_size)
+    {
+        op->error = DMA_ERROR_BUFFER_TOO_SMALL;
+        return false;
+    }
+    if (this->blocking_ops.size() >= this->max_inflight)
+    {
+        op->error = DMA_ERROR_NO_SLOT;
+        return false;
+    }
+
+    return true;
+}
+
+vp::IoReqStatus VelocityDma::launch_two_sided(vp::IoReq *req, uint64_t command)
+{
+    if (req->get_size() != 4)
+    {
+        return vp::IO_REQ_INVALID;
+    }
+
+    std::unique_ptr<BlockingOp> holder(new BlockingOp());
+    BlockingOp *op = holder.get();
+    op->packet_id = this->allocate_txn_id();
+    if (op->packet_id == 0)
+    {
+        op->packet_id = this->next_txn_id++ & CMD_TXN_ID_MASK;
+    }
+    op->peer_cluster = this->remote_cluster_reg;
+    op->send_offset = this->local_offset_reg;
+    op->recv_offset = command == REG_TWO_SENDRECV ? this->remote_offset_reg : this->local_offset_reg;
+    op->size = this->size_reg;
+    op->wait_send = command == REG_TWO_SEND || command == REG_TWO_SENDRECV;
+    op->wait_recv = command == REG_TWO_RECV || command == REG_TWO_SENDRECV;
+    op->send_done = !op->wait_send;
+    op->recv_done = !op->wait_recv;
+    op->error = DMA_ERROR_NONE;
+    op->regs_req = req;
+
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: two_sided_launch command=%s src=%u peer=%u send_offset=0x%x recv_offset=0x%x size=%u\n",
+        op->packet_id,
+        command == REG_TWO_SEND ? "send" : command == REG_TWO_RECV ? "recv" : "sendrecv",
+        this->cluster_id, op->peer_cluster, op->send_offset, op->recv_offset, op->size);
+
+    if (!this->validate_two_sided(op))
+    {
+        this->last_error = op->error;
+        return vp::IO_REQ_OK;
+    }
+
+    this->last_error = DMA_ERROR_NONE;
+    this->blocking_ops[op] = std::move(holder);
+
+    if (op->wait_recv)
+    {
+        this->post_two_sided_recv(op);
+    }
+
+    if (op->wait_send && !this->start_two_sided_send(op))
+    {
+        auto it = this->blocking_ops.find(op);
+        if (it != this->blocking_ops.end())
+        {
+            this->unpost_two_sided_recv(op);
+            this->last_error = op->error;
+            this->blocking_ops.erase(it);
+        }
+        return vp::IO_REQ_OK;
+    }
+
+    this->complete_two_sided_op(op);
+    return vp::IO_REQ_PENDING;
+}
+
+void VelocityDma::post_two_sided_recv(BlockingOp *op)
+{
+    if (this->match_pending_two_sided_send(op))
+    {
+        return;
+    }
+
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: two_sided_recv_post src=%u peer=%u recv_offset=0x%x size=%u\n",
+        op->packet_id, this->cluster_id, op->peer_cluster, op->recv_offset, op->size);
+    this->posted_two_sided_recvs.push_back(op);
+}
+
+void VelocityDma::unpost_two_sided_recv(BlockingOp *op)
+{
+    auto it = std::find(this->posted_two_sided_recvs.begin(), this->posted_two_sided_recvs.end(), op);
+    if (it != this->posted_two_sided_recvs.end())
+    {
+        this->posted_two_sided_recvs.erase(it);
+    }
+}
+
+bool VelocityDma::match_pending_two_sided_send(BlockingOp *op)
+{
+    for (auto it = this->pending_two_sided_sends.begin(); it != this->pending_two_sided_sends.end(); ++it)
+    {
+        if (it->src_cluster == op->peer_cluster && it->size == op->size)
+        {
+            vp::IoReq *remote_req = it->req;
+            this->pending_two_sided_sends.erase(it);
+            return this->consume_two_sided_send(op, remote_req);
+        }
+    }
+
+    return false;
+}
+
+bool VelocityDma::consume_two_sided_send(BlockingOp *op, vp::IoReq *remote_req)
+{
+    RemoteHeader header;
+    memcpy(&header, remote_req->get_data(), sizeof(RemoteHeader));
+
+    if (remote_req->get_size() != sizeof(RemoteHeader) + header.payload_size ||
+        header.payload_size != op->size || op->recv_offset + op->size > this->tcdm_size)
+    {
+        op->error = DMA_ERROR_BAD_SIZE;
+        op->recv_done = true;
+        remote_req->status = vp::IO_REQ_INVALID;
+        remote_req->get_resp_port()->resp(remote_req);
+        this->complete_two_sided_op(op);
+        return false;
+    }
+
+    Txn scratch;
+    scratch.id = header.txn_id;
+    scratch.type = DMA_TYPE_WRITE;
+    scratch.remote_cluster = header.src_cluster;
+    scratch.local_offset = op->recv_offset;
+    scratch.remote_offset = header.local_offset;
+    scratch.size = op->size;
+    scratch.status = DMA_STATUS_BUSY;
+    scratch.error = DMA_ERROR_NONE;
+    scratch.event = NULL;
+
+    uint64_t latency = 0;
+    if (!this->local_access(&scratch, "two_sided_dma_to_tcdm", op->recv_offset, op->size,
+        remote_req->get_data() + sizeof(RemoteHeader), true, latency))
+    {
+        op->error = scratch.error;
+        op->recv_done = true;
+        remote_req->status = vp::IO_REQ_INVALID;
+        remote_req->get_resp_port()->resp(remote_req);
+        this->complete_two_sided_op(op);
+        return false;
+    }
+
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: two_sided_recv_match src=%u peer=%u recv_offset=0x%x size=%u delay=%llu\n",
+        op->packet_id, this->cluster_id, op->peer_cluster, op->recv_offset, op->size,
+        (unsigned long long)(latency + this->base_latency));
+    this->schedule_two_sided_recv_completion(op, remote_req, latency);
+    return true;
+}
+
+bool VelocityDma::start_two_sided_send(BlockingOp *op)
+{
+    op->send_buffer.resize(op->size);
+
+    Txn scratch;
+    scratch.id = op->packet_id;
+    scratch.type = DMA_TYPE_WRITE;
+    scratch.remote_cluster = op->peer_cluster;
+    scratch.local_offset = op->send_offset;
+    scratch.remote_offset = 0;
+    scratch.size = op->size;
+    scratch.status = DMA_STATUS_BUSY;
+    scratch.error = DMA_ERROR_NONE;
+    scratch.event = NULL;
+
+    uint64_t latency = 0;
+    if (!this->local_access(&scratch, "two_sided_tcdm_to_dma", op->send_offset, op->size,
+        op->send_buffer.data(), false, latency))
+    {
+        op->error = scratch.error;
+        op->send_done = true;
+        return false;
+    }
+
+    std::unique_ptr<OutgoingPacket> packet = this->build_packet(NULL, op->packet_id, op->peer_cluster,
+        REMOTE_PHASE_TWO_SEND, op->send_offset, 0, op->size, op->send_buffer.data(), 0);
+    packet->blocking_op = op;
+    return this->schedule_packet_send(std::move(packet), latency);
+}
+
+bool VelocityDma::handle_two_sided_send(vp::IoReq *req, const RemoteHeader &header)
+{
+    if (req->get_size() != sizeof(RemoteHeader) + header.payload_size || header.payload_size == 0)
+    {
+        this->last_error = DMA_ERROR_BAD_SIZE;
+        return false;
+    }
+
+    for (auto it = this->posted_two_sided_recvs.begin(); it != this->posted_two_sided_recvs.end(); ++it)
+    {
+        BlockingOp *op = *it;
+        if (op->peer_cluster == header.src_cluster && op->size == header.payload_size)
+        {
+            this->posted_two_sided_recvs.erase(it);
+            return this->consume_two_sided_send(op, req);
+        }
+    }
+
+    PendingTwoSidedSend pending;
+    pending.src_cluster = header.src_cluster;
+    pending.size = header.payload_size;
+    pending.req = req;
+    this->pending_two_sided_sends.push_back(pending);
+
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: two_sided_send_hold dst=%u src=%u size=%u pending=%u\n",
+        header.txn_id, this->cluster_id, header.src_cluster, header.payload_size,
+        (uint32_t)this->pending_two_sided_sends.size());
+    return true;
+}
+
+void VelocityDma::schedule_two_sided_recv_completion(BlockingOp *op, vp::IoReq *remote_req, uint64_t cycles)
+{
+    std::unique_ptr<PendingTwoSidedRecv> pending(new PendingTwoSidedRecv());
+    PendingTwoSidedRecv *raw = pending.get();
+
+    pending->op = op;
+    pending->remote_req = remote_req;
+    pending->event = this->event_new(VelocityDma::two_sided_recv_event);
+    pending->event->get_args()[0] = raw;
+
+    cycles = std::max<uint64_t>(cycles + this->base_latency, 1);
+    this->pending_two_sided_recvs[raw] = std::move(pending);
+    raw->event->enqueue(cycles);
+}
+
+void VelocityDma::complete_two_sided_op(BlockingOp *op)
+{
+    if ((op->wait_send && !op->send_done) || (op->wait_recv && !op->recv_done))
+    {
+        return;
+    }
+
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: two_sided_complete src=%u peer=%u wait_send=%d wait_recv=%d error=%u\n",
+        op->packet_id, this->cluster_id, op->peer_cluster, op->wait_send, op->wait_recv, op->error);
+
+    this->last_error = op->error;
+    if (op->regs_req)
+    {
+        op->regs_req->status = vp::IO_REQ_OK;
+        op->regs_req->get_resp_port()->resp(op->regs_req);
+        op->regs_req = NULL;
+    }
+
+    this->blocking_ops.erase(op);
 }
 
 void VelocityDma::finish_txn(Txn *txn, uint32_t status, uint32_t error)
@@ -762,6 +1104,9 @@ vp::IoReqStatus VelocityDma::regs_req(vp::Block *__this, vp::IoReq *req)
             case REG_TYPE:           ok = _this->write_u32(req, _this->type_reg); break;
             case REG_TXN_ID:         ok = _this->write_u32(req, _this->txn_id_reg); break;
             case REG_QUERY_ID:       ok = _this->write_u32(req, _this->query_id_reg); break;
+            case REG_TWO_SEND:       return _this->launch_two_sided(req, REG_TWO_SEND);
+            case REG_TWO_RECV:       return _this->launch_two_sided(req, REG_TWO_RECV);
+            case REG_TWO_SENDRECV:   return _this->launch_two_sided(req, REG_TWO_SENDRECV);
             case REG_CMD:
             {
                 if (req->get_size() != 4)
@@ -971,6 +1316,11 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
             return vp::IO_REQ_OK;
         }
 
+        case REMOTE_PHASE_TWO_SEND:
+        {
+            return _this->handle_two_sided_send(req, header) ? vp::IO_REQ_PENDING : vp::IO_REQ_INVALID;
+        }
+
         default:
             _this->last_error = DMA_ERROR_REMOTE_ACCESS;
             return vp::IO_REQ_INVALID;
@@ -1063,6 +1413,34 @@ void VelocityDma::remote_write_event(vp::Block *__this, vp::ClockEvent *event)
 
     holder->req->status = vp::IO_REQ_OK;
     holder->req->get_resp_port()->resp(holder->req);
+}
+
+void VelocityDma::two_sided_recv_event(vp::Block *__this, vp::ClockEvent *event)
+{
+    VelocityDma *_this = (VelocityDma *)__this;
+    PendingTwoSidedRecv *pending = (PendingTwoSidedRecv *)event->get_args()[0];
+    auto it = _this->pending_two_sided_recvs.find(pending);
+    if (it == _this->pending_two_sided_recvs.end())
+    {
+        _this->last_error = DMA_ERROR_REMOTE_ACCESS;
+        return;
+    }
+
+    std::unique_ptr<PendingTwoSidedRecv> holder = std::move(it->second);
+    _this->pending_two_sided_recvs.erase(it);
+
+    velocity::PacketTraceInfo info;
+    if (velocity::packet_trace_decode(holder->remote_req, info))
+    {
+        _this->trace.msg(vp::Trace::LEVEL_TRACE,
+            "[%9u][DMA]: two_sided_recv_response phase=%s src=%u dst=%u status=ok\n",
+            info.packet_id, velocity::packet_phase_name(info.phase), info.src_cluster, info.dst_cluster);
+    }
+
+    holder->op->recv_done = true;
+    holder->remote_req->status = vp::IO_REQ_OK;
+    holder->remote_req->get_resp_port()->resp(holder->remote_req);
+    _this->complete_two_sided_op(holder->op);
 }
 
 void VelocityDma::complete_event(vp::Block *__this, vp::ClockEvent *event)

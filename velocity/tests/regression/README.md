@@ -9,6 +9,7 @@ columns come from `topologies.json`.
 read_after_write             PASS        PASS        FAIL
 injection_rate               PASS        PASS        PASS
 zero_load_latency            PASS        PASS        PASS
+two_sided_test               PASS        PASS        PASS
 max_bandwidth_4B             PASS        PASS        PASS
 ```
 
@@ -83,6 +84,7 @@ test type:
 [read_after_write     ] [ring_N4                     ] [################------------]  57% [PASS:4 | FAIL:0] RUN
 [injection_rate       ] [ring_N4                     ] [################------------]  57% [PASS:4 | FAIL:0] RUN
 [zero_load_latency    ] [ring_N4                     ] [################------------]  57% [PASS:4 | FAIL:0] RUN
+[two_sided_test       ] [ring_N4                     ] [################------------]  57% [PASS:4 | FAIL:0] RUN
 [max_bandwidth_4B     ] [ring_N4                     ] [################------------]  57% [PASS:4 | FAIL:0] RUN
 ```
 

@@ -3,14 +3,17 @@
     "read_after_write",
     "injection_rate",
     "zero_load_latency",
+    "two_sided_test",
     "max_bandwidth_4B"
   ],
   "full": [
     "read_after_write",
     "injection_rate",
     "zero_load_latency",
+    "two_sided_test",
     "max_bandwidth_4B",
-    "max_bandwidth_64B"
+    "max_bandwidth_64B",
+    "max_bandwidth_4096B"
   ],
   "debug": [
     "max_bandwidth_4096B"
@@ -33,6 +36,12 @@
       "app": "velocity/tests/topology_agnostic_tests/zero_load_latency/sw",
       "pass_regex": "ZERO_LOAD_LATENCY_RESULT PASS",
       "comment": "One probe from cluster 0 to every other active cluster."
+    },
+    "two_sided_test": {
+      "suite": "topology_agnostic_tests/two_sided_test",
+      "app": "velocity/tests/topology_agnostic_tests/two_sided_test/sw",
+      "pass_regex": "TWO_SIDED_RESULT PASS",
+      "comment": "Native blocking send, recv, and sendrecv between cluster 0 and cluster n-1."
     },
     "max_bandwidth_4B": {
       "suite": "topology_agnostic_tests/max_bandwidth",
@@ -62,7 +71,6 @@
       "suite": "topology_agnostic_tests/max_bandwidth",
       "app": "velocity/tests/topology_agnostic_tests/max_bandwidth/sw",
       "pass_regex": "MAX_BANDWIDTH_RESULT PASS",
-      "run_target": "rund",
       "cmake_defs": {
         "MAX_BANDWIDTH_TEST_TXN_SIZE": 4096,
         "MAX_BANDWIDTH_TEST_REPEAT": 128,

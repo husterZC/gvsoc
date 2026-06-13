@@ -23,6 +23,9 @@
 #define VELOCITY_DMA_REG_PROBE_LAT_LO   0x40
 #define VELOCITY_DMA_REG_PROBE_LAT_HI   0x44
 #define VELOCITY_DMA_REG_PROBE_DST      0x48
+#define VELOCITY_DMA_REG_TWO_SEND       0x4c
+#define VELOCITY_DMA_REG_TWO_RECV       0x50
+#define VELOCITY_DMA_REG_TWO_SENDRECV   0x54
 
 #define VELOCITY_DMA_CMD_REMOTE_CLUSTER_MASK 0x0000ffffu
 #define VELOCITY_DMA_CMD_TYPE_SHIFT          16
@@ -100,6 +103,47 @@ static inline uint32_t velocity_dma_probe(
 {
     return velocity_dma_start(remote_cluster, 0, 0, 0,
         VELOCITY_DMA_TYPE_LATENCY_PROBE, txn_id);
+}
+
+static inline uint32_t velocity_dma_send(
+    uint32_t remote_cluster,
+    uint32_t local_offset,
+    uint32_t size)
+{
+    *velocity_dma_reg(VELOCITY_DMA_REG_REMOTE_CLUSTER) = remote_cluster;
+    *velocity_dma_reg(VELOCITY_DMA_REG_LOCAL_OFFSET) = local_offset;
+    *velocity_dma_reg(VELOCITY_DMA_REG_SIZE) = size;
+    *velocity_dma_reg(VELOCITY_DMA_REG_TWO_SEND) = 1;
+
+    return *velocity_dma_reg(VELOCITY_DMA_REG_ERROR);
+}
+
+static inline uint32_t velocity_dma_recv(
+    uint32_t remote_cluster,
+    uint32_t local_offset,
+    uint32_t size)
+{
+    *velocity_dma_reg(VELOCITY_DMA_REG_REMOTE_CLUSTER) = remote_cluster;
+    *velocity_dma_reg(VELOCITY_DMA_REG_LOCAL_OFFSET) = local_offset;
+    *velocity_dma_reg(VELOCITY_DMA_REG_SIZE) = size;
+    *velocity_dma_reg(VELOCITY_DMA_REG_TWO_RECV) = 1;
+
+    return *velocity_dma_reg(VELOCITY_DMA_REG_ERROR);
+}
+
+static inline uint32_t velocity_dma_sendrecv(
+    uint32_t remote_cluster,
+    uint32_t send_offset,
+    uint32_t recv_offset,
+    uint32_t size)
+{
+    *velocity_dma_reg(VELOCITY_DMA_REG_REMOTE_CLUSTER) = remote_cluster;
+    *velocity_dma_reg(VELOCITY_DMA_REG_LOCAL_OFFSET) = send_offset;
+    *velocity_dma_reg(VELOCITY_DMA_REG_REMOTE_OFFSET) = recv_offset;
+    *velocity_dma_reg(VELOCITY_DMA_REG_SIZE) = size;
+    *velocity_dma_reg(VELOCITY_DMA_REG_TWO_SENDRECV) = 1;
+
+    return *velocity_dma_reg(VELOCITY_DMA_REG_ERROR);
 }
 
 static inline uint64_t velocity_dma_read64_regs(uint32_t lo_offset, uint32_t hi_offset)

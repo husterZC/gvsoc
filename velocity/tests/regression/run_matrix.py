@@ -686,6 +686,7 @@ def main():
     test_manifest = load_json(args.tests)
     topologies = select_topologies(topology_manifest, args.mode, args.topology)
     tests = select_entries(test_manifest, args.mode, 'tests', args.test)
+    run_target = args.run_target or ('rund' if args.mode == 'debug' else None)
     row_workers = len(tests) if args.jobs <= 0 else max(1, min(args.jobs, len(tests)))
     queued_commands = max(2, len(tests) + 1)
 
@@ -736,7 +737,7 @@ def main():
                     args.timeout,
                     sim_lock,
                     queued_commands,
-                    args.run_target,
+                    run_target,
                 )
                 futures[future] = test_name
 
