@@ -88,6 +88,6 @@ per cell with suite, status, return code, elapsed seconds, comment, and log path
 
 ## Environment
 
-Use the repository root README for environment setup. In particular, Codex or
-cluster shells usually need the conda bash hook, `source init.sh`, and a
-workspace-local `CCACHE_DIR`.
+Use the repository root README for the normal quick-start flow. For Codex,
+cluster, Python, Conda, toolchain, or ccache troubleshooting, use
+`codex_notes.md`.

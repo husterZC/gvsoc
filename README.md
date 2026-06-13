@@ -1,12 +1,16 @@
-# Velocity 🧭
+# Velocity
 
-This branch is prepared for Codex exploration of the Velocity GVSOC target.
-The goal is simple: build the hardware model, build the example software, and
-run the simulator from a fresh checkout with minimal guessing.
+Velocity is a GVSOC simulation target for a multi-cluster accelerator system.
+This repository contains the GVSOC framework, the Velocity hardware model,
+software build flow, unified interconnect topology models, and regression tests
+used to validate software behavior across interconnect configurations.
 
-## Quick Start 🚀
+Codex-specific setup notes, sandbox workarounds, and troubleshooting recipes
+were moved to [codex_notes.md](codex_notes.md).
 
-Use `bash`. From the repository root:
+## Quick Start
+
+Use `bash` from the repository root:
 
 ```bash
 eval "$(/usr/local/anaconda3/bin/conda shell.bash hook)"
@@ -15,270 +19,156 @@ source init.sh
 make hw sw run
 ```
 
-A successful run ends with the GVSOC progress bar reaching `100%`.
+A successful run builds the Velocity GVSOC target, builds the default software
+image, and runs `sw_build/velocity.elf` on
+`pulp.chips.velocity.velocity_target`.
 
-## First Run In The Codex Sandbox 🧰
-
-The Codex sandbox usually needs a few extra steps on the first run because the
-README command fetches submodules and toolchains from GitHub, and the default
-home directory cache can be read-only.
-
-### 1. Clone The Branch 🌱
+## Common Commands
 
 ```bash
-git clone --branch codex_velocity https://github.com/husterZC/gvsoc.git
-cd gvsoc
-```
-
-If GitHub access fails with `Could not resolve host: github.com`, rerun the
-clone with network access enabled.
-
-### 2. Enable Conda For Bash 🐍
-
-`init.sh` starts with:
-
-```bash
-conda activate py312
-```
-
-In non-interactive Codex shells, `conda activate` may fail unless the conda
-bash hook is loaded first:
-
-```bash
-eval "$(/usr/local/anaconda3/bin/conda shell.bash hook)"
-```
-
-The expected environment is `py312`, and the build expects Python `>= 3.12`.
-
-### 3. Put ccache In The Workspace 📦
-
-The sandbox may make `/home/.../.ccache` read-only. Use a cache directory inside
-the repo:
-
-```bash
-export CCACHE_DIR="$PWD/.ccache"
-```
-
-This avoids errors like:
-
-```text
-ccache: error: Failed to create temporary file for /home/.../.ccache/tmp/...: Read-only file system
-```
-
-### 4. Fetch Submodules And Toolchains 🛠️
-
-`source init.sh` updates Git submodules and prepares the RISC-V toolchain when
-needed:
-
-```bash
-source init.sh
-```
-
-If an earlier network-blocked attempt created an empty `third_party/toolchain`
-directory, `init.sh` may incorrectly skip the download. Force the toolchain
-target once:
-
-```bash
-make -B third_party/toolchain
-```
-
-This downloads and extracts the RISC-V toolchains used by the software build.
-Network access is required for this step.
-
-### 5. Build And Run ✨
-
-```bash
-make hw sw run
-```
-
-This performs:
-
-- `make hw`: configures Velocity and builds/installs the GVSOC model.
-- `make sw`: builds `sw_build/velocity.elf` and `sw_build/velocity.dump`.
-- `make run`: runs `sw_build/velocity.elf` on `pulp.chips.velocity.velocity_target`.
-
-## Known Sandbox Notes 📝
-
-These messages can appear in the cluster/Codex environment and are usually not
-the real failure:
-
-```text
-yp_bind_client_create_v3: RPC: Remote system error - Operation not permitted
-/usr/bin/id: cannot find name for user ID ...
-logger: socket /dev/log: Operation not permitted
-```
-
-Treat them as environment noise unless the command exits non-zero for another
-reason.
-
-## Common Failures And Fixes 🧯
-
-### `conda activate` Is Not Configured
-
-Symptom:
-
-```text
-CommandNotFoundError: Your shell has not been properly configured to use 'conda activate'.
-```
-
-Fix:
-
-```bash
-eval "$(/usr/local/anaconda3/bin/conda shell.bash hook)"
-source init.sh
-```
-
-### Python 3.6 Parses GVSOC Python Files
-
-Symptom:
-
-```text
-SyntaxError: future feature annotations is not defined
-```
-
-Cause: the build is using system Python 3.6 instead of the `py312` conda
-environment.
-
-Fix:
-
-```bash
-eval "$(/usr/local/anaconda3/bin/conda shell.bash hook)"
-source init.sh
-```
-
-Confirm that `init.sh` reports:
-
-```text
-python >= 3.12.0 found at <python>
-```
-
-### RISC-V Assembler Rejects `zfh`
-
-Symptom:
-
-```text
-Fatal error: -march=rv32imafdv_zfh: unsupported ISA subset `z'
-```
-
-Cause: the downloaded `third_party/toolchain/install/bin` compiler is missing
-from `PATH`, often because `third_party/toolchain` exists but is incomplete.
-
-Fix:
-
-```bash
-make -B third_party/toolchain
-source init.sh
+make hw
 make sw
-```
-
-### GitHub Downloads Fail
-
-Symptom:
-
-```text
-Could not resolve host: github.com
-wget: unable to resolve host address 'github.com'
-```
-
-Fix: rerun the same command with network access enabled in Codex. The affected
-steps are usually:
-
-```bash
-git clone --branch codex_velocity https://github.com/husterZC/gvsoc.git
-source init.sh
-make -B third_party/toolchain
-```
-
-## Pushing From Codex 🔐
-
-Use SSH for pushes. HTTPS may try to open an interactive GitHub askpass prompt,
-which does not work reliably in the Codex sandbox.
-
-Set the remote to SSH:
-
-```bash
-git remote set-url origin git@github.com:husterZC/gvsoc.git
-```
-
-Check the remote:
-
-```bash
-git remote -v
-```
-
-Expected push URL:
-
-```text
-origin  git@github.com:husterZC/gvsoc.git (push)
-```
-
-Commit and push the current branch:
-
-```bash
-git add README.md
-git commit -m "Document Codex simulator setup"
-GIT_SSH_COMMAND="ssh -o BatchMode=yes" git push origin codex_velocity
-```
-
-`BatchMode=yes` makes SSH fail cleanly instead of hanging on an interactive
-passphrase or password prompt. The sandbox may print this harmless warning:
-
-```text
-X11 forwarding request failed on channel 0
-```
-
-## Clean Rebuild Recipes 🧹
-
-Rebuild only the software:
-
-```bash
-eval "$(/usr/local/anaconda3/bin/conda shell.bash hook)"
-export CCACHE_DIR="$PWD/.ccache"
-source init.sh
+make run
+make rund
 make clean_sw
-make sw run
 ```
 
-Rebuild hardware and software:
+Useful variants:
 
 ```bash
-eval "$(/usr/local/anaconda3/bin/conda shell.bash hook)"
-export CCACHE_DIR="$PWD/.ccache"
-source init.sh
-make hw sw run
+make hw cfg=velocity/hw/velocity_arch.py
+make sw app=velocity/tests/topology_agnostic_tests/max_bandwidth/sw
+make sw sw_build_dir=sw_build_max_bandwidth app=velocity/tests/topology_agnostic_tests/max_bandwidth/sw
 ```
 
-Force toolchain download again:
+`make hw` copies the selected architecture into the generated Velocity target
+tree and builds the simulator model. `make sw` builds the selected software
+application. `make run` launches the simulator with the selected software build
+directory.
+
+## Project Layout
+
+- `velocity/hw/`: Velocity hardware target, architecture files, DMA model, and
+  cluster system integration.
+- `velocity/hw/unified_interco/`: topology-agnostic unified router/link models
+  plus topology builders in `topologies/`.
+- `velocity/sw/`: default Velocity software application, runtime files, linker
+  script, and CMake build entry point.
+- `velocity/tests/topology_agnostic_tests/`: reusable software tests that can run
+  against any supported interconnect topology.
+- `velocity/tests/regression/`: topology/test matrix manifests, regression
+  wrappers, colored progress runner, and result output.
+- `velocity/utils/`: configuration generation helpers used by the build flow.
+- `core/`, `gapy/`, `gvrun/`, `gvtest/`, `pulp/`, `pulpos/`: GVSOC framework,
+  targets, launch tools, and PULP platform components.
+- `third_party/`: external dependencies and toolchain installation area.
+- `build/`, `install/`, `sw_build*/`: generated hardware, install, and software
+  build outputs.
+
+## Architecture And Topologies
+
+The default architecture lives in
+[velocity/hw/velocity_arch.py](velocity/hw/velocity_arch.py). Leaving
+`self.unified_interco = None` keeps the legacy flat DMA interconnect. Set
+`self.unified_interco` to a topology name, or set it to `True` with
+`self.unified_interco_topology`, to instantiate the unified interconnect.
+
+Topology implementations live in
+[velocity/hw/unified_interco/topologies/](velocity/hw/unified_interco/topologies/).
+The supported families include:
+
+- `fat_tree`
+- `mesh_2d`, `mesh_3d`
+- `torus_2d`, `torus_3d`
+- `ruche_2d`, `ruche_3d`
+- `hexa_mesh`, `hexa_torus`
+- `octa_mesh`, `octa_torus`
+- `ring`
+- `tree`
+- `dragonfly`
+- `hypercube`
+
+Each topology builder checks its parameters and supports partial population when
+`num_cluster` is less than or equal to the topology endpoint capacity. See
+[velocity/hw/unified_interco/topologies/README.md](velocity/hw/unified_interco/topologies/README.md)
+for topology parameters and routing modes.
+
+## Running Tests
+
+The regression flow treats tests and topologies as independent axes: each test
+row can be run against each topology column.
+
+Run the small smoke matrix:
 
 ```bash
-make -B third_party/toolchain
+velocity/tests/regression/run_smoke.sh
 ```
 
-## Useful Paths 🗺️
-
-- `velocity/velocity.mk`: Velocity `hw`, `sw`, `run`, and `rund` targets.
-- `velocity/hw/velocity_arch.py`: default Velocity architecture config.
-- `velocity/sw/`: runtime and example software.
-- `sw_build/velocity.elf`: software binary passed to GVSOC.
-- `sw_build/velocity.dump`: generated disassembly.
-- `install/bin/gvsoc`: installed simulator launcher.
-- `.ccache/`: workspace-local compiler cache for sandbox runs.
-
-## Verified Codex Command ✅
-
-The following command sequence was verified in the Codex sandbox:
+Run the full matrix:
 
 ```bash
-eval "$(/usr/local/anaconda3/bin/conda shell.bash hook)"
-export CCACHE_DIR="$PWD/.ccache"
-source init.sh
-make -B third_party/toolchain
-make hw sw run
+velocity/tests/regression/run_full.sh
 ```
 
-Final observed result:
+Common overrides:
+
+```bash
+JOBS=2 TIMEOUT=7200 velocity/tests/regression/run_smoke.sh
+PROGRESS=bar COLOR=always velocity/tests/regression/run_smoke.sh
+PROGRESS=off COLOR=never velocity/tests/regression/run_smoke.sh
+```
+
+Direct runner examples:
+
+```bash
+python3 velocity/tests/regression/run_matrix.py --mode smoke
+python3 velocity/tests/regression/run_matrix.py --mode full --test zero_load_latency
+python3 velocity/tests/regression/run_matrix.py --mode smoke --topology mesh_2d_X2_Y2
+```
+
+Results are written under:
 
 ```text
-[SystemInfo]: num_cluster = 128
-[====================================================================================================] 100%
+velocity/tests/regression/results/matrix/<mode>/<timestamp>/
 ```
+
+The important files are `matrix.csv`, `detail.csv`, and the per-cell logs in
+`logs/`. See [velocity/tests/README.md](velocity/tests/README.md) and
+[velocity/tests/regression/README.md](velocity/tests/regression/README.md) for
+the full test organization and regression matrix syntax.
+
+## Adding Tests Or Topologies
+
+Add topology-agnostic software workloads under
+`velocity/tests/topology_agnostic_tests/<test_name>/sw`, then register the row
+in `velocity/tests/regression/tests.json`.
+
+For normal generated topology cases, add only the topology name to
+`velocity/tests/regression/topologies.json`. Names encode parameters, for
+example:
+
+```text
+fat_tree_K4_L1
+mesh_2d_X8_Y8
+torus_2d_X4_Y4_wrap
+ruche_3d_X4_Y2_Z2_H2
+dragonfly_G2_A2_P1
+hypercube_D7_C64
+```
+
+Use the optional `topologies` object in `topologies.json` only when a generated
+case needs an explicit override.
+
+## Environment And Troubleshooting
+
+The normal setup path is:
+
+```bash
+eval "$(/usr/local/anaconda3/bin/conda shell.bash hook)"
+export CCACHE_DIR="$PWD/.ccache"
+source init.sh
+```
+
+If Python, Conda, toolchain, network, ccache, or Codex sandbox issues appear,
+use [codex_notes.md](codex_notes.md). It contains the previous root README with
+the detailed environment fixes.

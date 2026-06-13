@@ -109,5 +109,6 @@ results/matrix/<mode>/<timestamp>/logs/
 
 ## Environment
 
-If Python, conda, toolchain, or simulator setup fails, use the setup flow in the
-repository root `README.md`.
+If Python, Conda, toolchain, or simulator setup fails, use the normal setup flow
+in the repository root `README.md` and the troubleshooting notes in
+`codex_notes.md`.
