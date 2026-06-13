@@ -18,26 +18,34 @@ max_bandwidth_4B             PASS        PASS        PASS
 - `tests.json`: topology-agnostic test rows.
 - `run_matrix.py`: Python matrix runner with colored row progress.
 - `run_smoke.sh`: small matrix wrapper.
+- `run_debug.sh`: single debug-case wrapper.
 - `run_full.sh`: full matrix wrapper.
 
 ## Run
 
 ```bash
 velocity/tests/regression/run_smoke.sh
+velocity/tests/regression/run_debug.sh
 velocity/tests/regression/run_full.sh
 ```
+
+The debug manifest currently runs `max_bandwidth_4096B` on `fat_tree_K8_L3`
+with `make rund`, which records DMA and unified interconnect traces in
+`analyze_trace.txt` under the generated software build directory.
 
 Subset examples:
 
 ```bash
 python3 velocity/tests/regression/run_matrix.py --mode smoke --topology torus_2d_X3_Y2_wrap
+python3 velocity/tests/regression/run_matrix.py --mode debug
 python3 velocity/tests/regression/run_matrix.py --mode full --test read_after_write --test zero_load_latency
+python3 velocity/tests/regression/run_matrix.py --mode smoke --run-target rund
 ```
 
 ## Topology Names
 
 Topology columns are generated from their names. For normal cases, add the name
-to `smoke` or `full`; no matching entry is needed in `topologies`.
+to `smoke`, `debug`, or `full`; no matching entry is needed in `topologies`.
 
 Supported name forms:
 
@@ -88,6 +96,9 @@ python3 velocity/tests/regression/run_matrix.py --mode smoke --progress line --c
 `JOBS=0` means one worker per selected test row. Set `JOBS=N` in the wrapper
 environment to cap row workers. The wrappers also accept `PROGRESS=auto|bar|line|off`
 and `COLOR=auto|always|never`.
+
+Use `--run-target rund` to force traced simulator execution for any selected
+matrix cells.
 
 ## Scheduling
 

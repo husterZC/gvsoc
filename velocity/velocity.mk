@@ -44,9 +44,11 @@ clean_sw:
 ## 				Make Targets for Run Simulator		 				##
 ######################################################################
 
+run_trace_args ?= --trace-level=trace --trace=system/cluster_.*/dma/trace --trace=system/cluster_.*/tcdm/dma_converter/trace --trace=system/dma_interco/.*/trace
+
 run:
 	./install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary $(sw_build_dir)/velocity.elf run
 
 rund:
 	mkdir -p $(sw_build_dir)
-	bash -o pipefail -c './install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary $(sw_build_dir)/velocity.elf run --trace-level=trace --trace=system/cluster_.*/dma/trace --trace=system/cluster_.*/tcdm/dma_converter/trace 2>&1 | tee $(sw_build_dir)/analyze_trace.txt'
+	bash -o pipefail -c './install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary $(sw_build_dir)/velocity.elf run $(run_trace_args) 2>&1 | tee $(sw_build_dir)/analyze_trace.txt'

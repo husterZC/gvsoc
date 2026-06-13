@@ -104,6 +104,15 @@ Run the small smoke matrix:
 velocity/tests/regression/run_smoke.sh
 ```
 
+Run the single debug case:
+
+```bash
+velocity/tests/regression/run_debug.sh
+```
+
+The debug case uses `make rund`, so simulator traces are also written to
+`analyze_trace.txt` inside that cell's software build directory.
+
 Run the full matrix:
 
 ```bash
@@ -122,8 +131,10 @@ Direct runner examples:
 
 ```bash
 python3 velocity/tests/regression/run_matrix.py --mode smoke
+python3 velocity/tests/regression/run_matrix.py --mode debug
 python3 velocity/tests/regression/run_matrix.py --mode full --test zero_load_latency
 python3 velocity/tests/regression/run_matrix.py --mode smoke --topology mesh_2d_X2_Y2
+python3 velocity/tests/regression/run_matrix.py --mode smoke --run-target rund
 ```
 
 Results are written under:

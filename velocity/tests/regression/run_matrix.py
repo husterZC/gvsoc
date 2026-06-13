@@ -463,13 +463,17 @@ def cmake_arg(test, app_path):
     return ' '.join(args)
 
 
-def run_test_cell(test_name, test, topology_name, repo_root, run_dir, timeout, sim_lock, queued_commands):
+def run_test_cell(test_name, test, topology_name, repo_root, run_dir, timeout, sim_lock, queued_commands, run_target):
     app_path = repo_root / test['app']
     build_dir = run_dir / 'sw_builds' / topology_name / test_name
     log_path = run_dir / 'logs' / '{}__{}.log'.format(topology_name, test_name)
     cmake = cmake_arg(test, app_path)
-    run_command = 'timeout {} make run sw_build_dir={}'.format(
+    target = run_target or test.get('run_target', 'run')
+    if target not in ('run', 'rund'):
+        raise ValueError('Unsupported run target for {}: {}'.format(test_name, target))
+    run_command = 'timeout {} make {} sw_build_dir={}'.format(
         int(timeout),
+        target,
         shlex.quote(str(build_dir)),
     )
     if sim_lock is not None:
@@ -659,7 +663,7 @@ def sort_rows(rows, tests, topologies):
 def main():
     default_dir = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description='Run topology-by-test Velocity matrix regressions.')
-    parser.add_argument('--mode', choices=['smoke', 'full'], default='smoke')
+    parser.add_argument('--mode', choices=['smoke', 'full', 'debug'], default='smoke')
     parser.add_argument('--jobs', type=int, default=0, help='Parallel test-type workers. 0 means one worker per selected test row.')
     parser.add_argument('--timeout', type=int, default=1800, help='Per simulator command timeout in seconds')
     parser.add_argument('--topology', action='append', help='Run one topology column; may be repeated')
@@ -669,6 +673,7 @@ def main():
     parser.add_argument('--results', type=Path, default=default_dir / 'results')
     parser.add_argument('--progress', choices=['auto', 'bar', 'line', 'off'], default='auto')
     parser.add_argument('--color', choices=['auto', 'always', 'never'], default='auto')
+    parser.add_argument('--run-target', choices=['run', 'rund'], help='Override the make target used for simulator execution')
     parser.add_argument(
         '--no-sim-lock',
         action='store_true',
@@ -731,6 +736,7 @@ def main():
                     args.timeout,
                     sim_lock,
                     queued_commands,
+                    args.run_target,
                 )
                 futures[future] = test_name
 

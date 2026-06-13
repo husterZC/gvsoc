@@ -73,13 +73,23 @@ vp::IoReqStatus UnifiedLink::req(vp::Block *__this, vp::IoReq *req)
 
 vp::IoReqStatus UnifiedLink::handle_req(vp::IoReq *req)
 {
-    if (!this->denied.empty() || this->pending_size + (int64_t)req->get_size() > this->max_pending_size)
+    bool fits = this->pending_size + (int64_t)req->get_size() <= this->max_pending_size;
+    if (!this->denied.empty() || (!fits && this->pending_size != 0))
     {
+        this->trace.msg(vp::Trace::LEVEL_TRACE,
+            "link deny addr=0x%llx size=%u pending=%lld limit=%lld\n",
+            (unsigned long long)req->get_addr(), (uint32_t)req->get_size(),
+            (long long)this->pending_size, (long long)this->max_pending_size);
         this->denied.push_back(req);
         return vp::IO_REQ_DENIED;
     }
 
-    this->pending.push_back({req, this->clock.get_cycles() + this->latency});
+    int64_t ready_cycle = this->clock.get_cycles() + this->latency;
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "link enqueue addr=0x%llx size=%u is_write=%d ready=%lld pending=%lld\n",
+        (unsigned long long)req->get_addr(), (uint32_t)req->get_size(),
+        req->get_is_write(), (long long)ready_cycle, (long long)this->pending_size);
+    this->pending.push_back({req, ready_cycle});
     this->pending_size += req->get_size();
     this->schedule();
     return vp::IO_REQ_PENDING;
@@ -87,10 +97,15 @@ vp::IoReqStatus UnifiedLink::handle_req(vp::IoReq *req)
 
 void UnifiedLink::grant_waiting_inputs()
 {
-    while (!this->denied.empty() &&
-        this->pending_size + (int64_t)this->denied.front()->get_size() <= this->max_pending_size)
+    while (!this->denied.empty())
     {
         vp::IoReq *req = this->denied.front();
+        bool fits = this->pending_size + (int64_t)req->get_size() <= this->max_pending_size;
+        if (!fits && this->pending_size != 0)
+        {
+            break;
+        }
+
         this->denied.pop_front();
         this->pending.push_back({req, this->clock.get_cycles() + this->latency});
         this->pending_size += req->get_size();
@@ -143,11 +158,18 @@ void UnifiedLink::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
     req->arg_push((void *)req->get_resp_port());
 
     _this->outstanding.insert(req);
+    _this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "link forward addr=0x%llx size=%u ready=%lld cycles=%lld outstanding=%zu\n",
+        (unsigned long long)req->get_addr(), (uint32_t)req->get_size(),
+        (long long)ready_cycle, (long long)cycles, _this->outstanding.size());
     vp::IoReqStatus status = _this->output_itf.req(req);
     bool completed = _this->outstanding.find(req) == _this->outstanding.end();
 
     if (status == vp::IO_REQ_DENIED)
     {
+        _this->trace.msg(vp::Trace::LEVEL_TRACE,
+            "link stalled addr=0x%llx size=%u\n",
+            (unsigned long long)req->get_addr(), (uint32_t)req->get_size());
         _this->stalled_req = req;
     }
     else if (status == vp::IO_REQ_PENDING)
@@ -180,6 +202,9 @@ void UnifiedLink::grant(vp::Block *__this, vp::IoReq *req)
     UnifiedLink *_this = (UnifiedLink *)__this;
     if (_this->stalled_req == req)
     {
+        _this->trace.msg(vp::Trace::LEVEL_TRACE,
+            "link grant addr=0x%llx size=%u\n",
+            (unsigned long long)req->get_addr(), (uint32_t)req->get_size());
         _this->stalled_req = nullptr;
         _this->next_send_cycle = _this->clock.get_cycles() + _this->transfer_cycles(req);
         if (!_this->pending.empty())
@@ -201,11 +226,18 @@ void UnifiedLink::response(vp::Block *__this, vp::IoReq *req)
     }
 
     req->resp_port = (vp::IoSlave *)req->arg_pop();
+    _this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "link response addr=0x%llx size=%u outstanding=%zu\n",
+        (unsigned long long)req->get_addr(), (uint32_t)req->get_size(),
+        _this->outstanding.size());
     req->get_resp_port()->resp(req);
 }
 
 void UnifiedLink::finish_req(vp::IoReq *req, vp::IoReqStatus status)
 {
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "link finish status=%d addr=0x%llx size=%u\n",
+        status, (unsigned long long)req->get_addr(), (uint32_t)req->get_size());
     req->status = status;
     req->get_resp_port()->resp(req);
 }

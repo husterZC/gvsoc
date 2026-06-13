@@ -38,6 +38,15 @@ Run the small matrix:
 velocity/tests/regression/run_smoke.sh
 ```
 
+Run the debug matrix:
+
+```bash
+velocity/tests/regression/run_debug.sh
+```
+
+The debug matrix uses `make rund` for simulator execution and preserves the
+trace stream in each debug cell's `analyze_trace.txt`.
+
 Run the full matrix:
 
 ```bash
@@ -67,8 +76,10 @@ Direct runner examples:
 
 ```bash
 python3 velocity/tests/regression/run_matrix.py --mode smoke
+python3 velocity/tests/regression/run_matrix.py --mode debug
 python3 velocity/tests/regression/run_matrix.py --mode full --test zero_load_latency
 python3 velocity/tests/regression/run_matrix.py --mode smoke --topology torus_2d_X3_Y2_wrap --color always
+python3 velocity/tests/regression/run_matrix.py --mode smoke --run-target rund
 ```
 
 `gvsoc` invocations are locked by default because the generated target and

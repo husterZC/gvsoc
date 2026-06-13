@@ -115,19 +115,34 @@ vp::IoReqStatus UnifiedRouter::req(vp::Block *__this, vp::IoReq *req, int port)
 
 vp::IoReqStatus UnifiedRouter::handle_req(vp::IoReq *req, int port)
 {
-    if (port < 0 || port >= this->radix || this->route(req) < 0)
+    int output = port < 0 || port >= this->radix ? -1 : this->route(req);
+    if (output < 0)
     {
+        this->trace.msg(vp::Trace::LEVEL_TRACE,
+            "router=%d invalid input=%d addr=0x%llx size=%u is_write=%d\n",
+            this->router_id, port, (unsigned long long)req->get_addr(),
+            (uint32_t)req->get_size(), req->get_is_write());
         req->status = vp::IO_REQ_INVALID;
         return vp::IO_REQ_INVALID;
     }
 
     InputPort &input = this->inputs[port];
-    if (!input.denied.empty() || input.pending_size + (int64_t)req->get_size() > this->max_input_pending_size)
+    bool fits = input.pending_size + (int64_t)req->get_size() <= this->max_input_pending_size;
+    if (!input.denied.empty() || (!fits && input.pending_size != 0))
     {
+        this->trace.msg(vp::Trace::LEVEL_TRACE,
+            "router=%d deny input=%d output=%d addr=0x%llx size=%u pending=%lld limit=%lld\n",
+            this->router_id, port, output, (unsigned long long)req->get_addr(),
+            (uint32_t)req->get_size(), (long long)input.pending_size,
+            (long long)this->max_input_pending_size);
         input.denied.push_back(req);
         return vp::IO_REQ_DENIED;
     }
 
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "router=%d enqueue input=%d output=%d addr=0x%llx size=%u is_write=%d pending=%lld\n",
+        this->router_id, port, output, (unsigned long long)req->get_addr(),
+        (uint32_t)req->get_size(), req->get_is_write(), (long long)input.pending_size);
     input.pending.push_back(req);
     input.pending_size += req->get_size();
     this->schedule();
@@ -158,10 +173,15 @@ int UnifiedRouter::route(vp::IoReq *req)
 
 void UnifiedRouter::grant_waiting_input(InputPort &input)
 {
-    while (!input.denied.empty() &&
-        input.pending_size + (int64_t)input.denied.front()->get_size() <= this->max_input_pending_size)
+    while (!input.denied.empty())
     {
         vp::IoReq *req = input.denied.front();
+        bool fits = input.pending_size + (int64_t)req->get_size() <= this->max_input_pending_size;
+        if (!fits && input.pending_size != 0)
+        {
+            break;
+        }
+
         input.denied.pop_front();
         input.pending.push_back(req);
         input.pending_size += req->get_size();
@@ -196,6 +216,10 @@ void UnifiedRouter::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
             input.pending.pop_front();
             input.pending_size -= req->get_size();
             _this->grant_waiting_input(input);
+            _this->trace.msg(vp::Trace::LEVEL_TRACE,
+                "router=%d route_invalid input=%d addr=0x%llx size=%u\n",
+                _this->router_id, input_id, (unsigned long long)req->get_addr(),
+                (uint32_t)req->get_size());
             _this->finish_req(req, vp::IO_REQ_INVALID);
             continue;
         }
@@ -220,11 +244,20 @@ void UnifiedRouter::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
         req->arg_push((void *)req->get_resp_port());
 
         _this->outstanding.insert(req);
+        _this->trace.msg(vp::Trace::LEVEL_TRACE,
+            "router=%d forward input=%d output=%d addr=0x%llx size=%u outstanding=%zu\n",
+            _this->router_id, queued.input, output_id,
+            (unsigned long long)req->get_addr(), (uint32_t)req->get_size(),
+            _this->outstanding.size());
         vp::IoReqStatus status = _this->output_itfs[output_id].req(req);
         bool completed = _this->outstanding.find(req) == _this->outstanding.end();
 
         if (status == vp::IO_REQ_DENIED)
         {
+            _this->trace.msg(vp::Trace::LEVEL_TRACE,
+                "router=%d stalled output=%d addr=0x%llx size=%u\n",
+                _this->router_id, output_id, (unsigned long long)req->get_addr(),
+                (uint32_t)req->get_size());
             output.stalled = true;
             output.stalled_req = req;
         }
@@ -268,6 +301,10 @@ void UnifiedRouter::grant(vp::Block *__this, vp::IoReq *req, int port)
     OutputPort &output = _this->outputs[port];
     if (output.stalled_req == req)
     {
+        _this->trace.msg(vp::Trace::LEVEL_TRACE,
+            "router=%d grant output=%d addr=0x%llx size=%u\n",
+            _this->router_id, port, (unsigned long long)req->get_addr(),
+            (uint32_t)req->get_size());
         output.stalled = false;
         output.stalled_req = nullptr;
         _this->schedule();
@@ -283,11 +320,19 @@ void UnifiedRouter::response(vp::Block *__this, vp::IoReq *req, int port)
     }
 
     req->resp_port = (vp::IoSlave *)req->arg_pop();
+    _this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "router=%d response port=%d addr=0x%llx size=%u outstanding=%zu\n",
+        _this->router_id, port, (unsigned long long)req->get_addr(),
+        (uint32_t)req->get_size(), _this->outstanding.size());
     req->get_resp_port()->resp(req);
 }
 
 void UnifiedRouter::finish_req(vp::IoReq *req, vp::IoReqStatus status)
 {
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "router=%d finish status=%d addr=0x%llx size=%u\n",
+        this->router_id, status, (unsigned long long)req->get_addr(),
+        (uint32_t)req->get_size());
     req->status = status;
     req->get_resp_port()->resp(req);
 }

@@ -26,5 +26,8 @@
     "dragonfly_G2_A2_P1",
     "hypercube_D2"
   ],
+  "debug": [
+    "fat_tree_K8_L3"
+  ],
   "topologies": {}
 }
