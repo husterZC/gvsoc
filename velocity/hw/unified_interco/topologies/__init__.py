@@ -1,5 +1,5 @@
-from pulp.chips.velocity.unified_interco.fat_tree import FatTreeInterconnect
 from pulp.chips.velocity.unified_interco.topologies.dragonfly import DragonflyInterconnect
+from pulp.chips.velocity.unified_interco.topologies.fat_tree import FatTreeInterconnect
 from pulp.chips.velocity.unified_interco.topologies.hypercube import HypercubeInterconnect
 from pulp.chips.velocity.unified_interco.topologies.mesh import (
     HexaMeshInterconnect,

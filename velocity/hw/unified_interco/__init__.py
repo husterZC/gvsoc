@@ -1,8 +1,8 @@
-from pulp.chips.velocity.unified_interco.fat_tree import FatTreeInterconnect
 from pulp.chips.velocity.unified_interco.link import UnifiedLink
 from pulp.chips.velocity.unified_interco.router import UnifiedRouter
 from pulp.chips.velocity.unified_interco.topologies import (
     DragonflyInterconnect,
+    FatTreeInterconnect,
     HexaMeshInterconnect,
     HexaTorusInterconnect,
     HypercubeInterconnect,

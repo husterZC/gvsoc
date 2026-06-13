@@ -160,8 +160,8 @@ def parse_fat_tree_name(groups):
     config = {
         'topology': 'fat_tree',
         'attrs': {
-            'unified_interco_radix': radix,
-            'unified_interco_level': level,
+            'unified_interco_tree_radix': radix,
+            'unified_interco_tree_level': level,
         },
     }
     return capacity_with_optional_clusters(config, capacity, groups.get('c'))
@@ -351,6 +351,10 @@ def py_literal(value):
     raise TypeError('Unsupported architecture value: {!r}'.format(value))
 
 
+def arch_assignment(name, value, width=52):
+    return '        self.{:<{}} = {}'.format(name, width, value)
+
+
 def write_arch(path, topology_name, topology):
     attrs = topology.get('attrs', {})
     topology_kind = topology.get('topology')
@@ -363,44 +367,42 @@ def write_arch(path, topology_name, topology):
         'class VelocityArch:',
         '',
         '    def __init__(self):',
-        '        self.num_cluster             = {}'.format(clusters),
-        '        self.cluster_num_lane        = 32',
-        '        self.cluster_lane_width      = 4',
-        '        self.dma_reg_offset          = 0x00000100',
-        '        self.dma_reg_size            = 0x00000100',
-        '        self.dma_bus_width           = 16',
-        '        self.dma_read_buffer_size    = 4096',
-        '        self.dma_write_buffer_size   = 4096',
-        '        self.dma_max_inflight_txn    = 16',
-        '        self.dma_base_latency        = 1',
-        '        self.dma_cluster_stride      = 0x00010000',
-        '        self.unified_interco         = {}'.format(unified_interco),
-        '        self.unified_interco_topology = {}'.format(unified_topology),
-        '        self.unified_interco_radix   = 4',
-        '        self.unified_interco_level   = 2',
-        '        self.unified_interco_link_latency = 1',
-        '        self.unified_interco_link_width = self.dma_bus_width',
-        '        self.unified_interco_link_pending_size = self.dma_write_buffer_size',
-        '        self.unified_interco_router_pending_size = self.dma_write_buffer_size',
+        arch_assignment('num_cluster', clusters),
+        arch_assignment('cluster_num_lane', 32),
+        arch_assignment('cluster_lane_width', 4),
+        arch_assignment('dma_reg_offset', '0x00000100'),
+        arch_assignment('dma_reg_size', '0x00000100'),
+        arch_assignment('dma_bus_width', 16),
+        arch_assignment('dma_read_buffer_size', 4096),
+        arch_assignment('dma_write_buffer_size', 4096),
+        arch_assignment('dma_max_inflight_txn', 16),
+        arch_assignment('dma_base_latency', 1),
+        arch_assignment('dma_cluster_stride', '0x00010000'),
+        arch_assignment('unified_interco', unified_interco),
+        arch_assignment('unified_interco_topology', unified_topology),
+        arch_assignment('unified_interco_link_latency', 1),
+        arch_assignment('unified_interco_link_width', 'self.dma_bus_width'),
+        arch_assignment('unified_interco_link_pending_size', 'self.dma_write_buffer_size'),
+        arch_assignment('unified_interco_router_pending_size', 'self.dma_write_buffer_size'),
     ]
 
     for attr_name, attr_value in attrs.items():
-        lines.append('        self.{} = {}'.format(attr_name, py_literal(attr_value)))
+        lines.append(arch_assignment(attr_name, py_literal(attr_value)))
 
     lines.extend([
-        '        self.cluster_tcdm_base       = 0x00000000',
-        '        self.cluster_tcdm_size       = 0x00100000',
-        '        self.cluster_stack_base      = 0x10000000',
-        '        self.cluster_stack_size      = 0x00020000',
-        '        self.cluster_zomem_base      = 0x18000000',
-        '        self.cluster_zomem_size      = 0x00020000',
-        '        self.cluster_reg_base        = 0x20000000',
-        '        self.cluster_reg_size        = 0x00000200',
-        '        self.instruction_mem_base    = 0x80000000',
-        '        self.instruction_mem_size    = 0x00010000',
-        '        self.soc_register_base       = 0x70000000',
-        '        self.soc_register_size       = 0x00010000',
-        '        self.soc_register_eoc        = 0x70000000',
+        arch_assignment('cluster_tcdm_base', '0x00000000'),
+        arch_assignment('cluster_tcdm_size', '0x00100000'),
+        arch_assignment('cluster_stack_base', '0x10000000'),
+        arch_assignment('cluster_stack_size', '0x00020000'),
+        arch_assignment('cluster_zomem_base', '0x18000000'),
+        arch_assignment('cluster_zomem_size', '0x00020000'),
+        arch_assignment('cluster_reg_base', '0x20000000'),
+        arch_assignment('cluster_reg_size', '0x00000200'),
+        arch_assignment('instruction_mem_base', '0x80000000'),
+        arch_assignment('instruction_mem_size', '0x00010000'),
+        arch_assignment('soc_register_base', '0x70000000'),
+        arch_assignment('soc_register_size', '0x00010000'),
+        arch_assignment('soc_register_eoc', '0x70000000'),
         '',
     ])
 

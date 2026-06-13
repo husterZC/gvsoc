@@ -6,12 +6,12 @@ class TreeInterconnect(GraphTopologyInterconnect):
     def __init__(self, parent, name, clusters, arch):
         self.radix = get_int_attr(
             arch,
-            ['unified_interco_tree_radix', 'unified_interco_radix'],
+            ['unified_interco_tree_radix'],
             default=2,
         )
         self.level = get_int_attr(
             arch,
-            ['unified_interco_tree_level', 'unified_interco_level'],
+            ['unified_interco_tree_level'],
             default=1,
         )
 
