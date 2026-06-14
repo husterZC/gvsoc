@@ -5,6 +5,7 @@
     "zero_load_latency",
     "two_sided_test",
     "software_collective_tree",
+    "hardware_collective_innetwork",
     "max_bandwidth_4B"
   ],
   "full": [
@@ -13,6 +14,7 @@
     "zero_load_latency",
     "two_sided_test",
     "software_collective_tree",
+    "hardware_collective_innetwork",
     "max_bandwidth_4B",
     "max_bandwidth_64B",
     "max_bandwidth_4096B"
@@ -54,6 +56,12 @@
         "SOFTWARE_COLLECTIVE_TREE_TEST_MAX_SUBSET_GROUP": 8
       },
       "comment": "Tree-based logical collectives over native two-sided DMA."
+    },
+    "hardware_collective_innetwork": {
+      "suite": "topology_agnostic_tests/hardware_collective_innetwork",
+      "app": "velocity/tests/topology_agnostic_tests/hardware_collective_innetwork/sw",
+      "pass_regex": "HARDWARE_COLLECTIVE_INNETWORK_RESULT PASS",
+      "comment": "Topology-agnostic in-router broadcast, reduce, scatter, gather, and all-to-all collectives."
     },
     "max_bandwidth_4B": {
       "suite": "topology_agnostic_tests/max_bandwidth",

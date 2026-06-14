@@ -16,6 +16,7 @@ constexpr uint32_t REMOTE_PHASE_READ_REQ = 1;
 constexpr uint32_t REMOTE_PHASE_READ_RESP = 2;
 constexpr uint32_t REMOTE_PHASE_LATENCY_PROBE = 3;
 constexpr uint32_t REMOTE_PHASE_TWO_SEND = 4;
+constexpr uint32_t REMOTE_PHASE_INNETWORK_COLLECTIVE = 5;
 
 struct PacketHeader
 {
@@ -56,6 +57,7 @@ inline const char *packet_phase_name(uint32_t phase)
         case REMOTE_PHASE_READ_RESP: return "read_resp";
         case REMOTE_PHASE_LATENCY_PROBE: return "latency_probe";
         case REMOTE_PHASE_TWO_SEND: return "two_send";
+        case REMOTE_PHASE_INNETWORK_COLLECTIVE: return "innetwork_collective";
         default: return "unknown";
     }
 }

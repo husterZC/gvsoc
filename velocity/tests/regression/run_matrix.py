@@ -384,6 +384,10 @@ def write_arch(path, topology_name, topology):
         arch_assignment('unified_interco_link_width', 'self.dma_bus_width'),
         arch_assignment('unified_interco_link_pending_size', 'self.dma_write_buffer_size'),
         arch_assignment('unified_interco_router_pending_size', 'self.dma_write_buffer_size'),
+        arch_assignment('unified_interco_collective_buffer_size', 65536),
+        arch_assignment('unified_interco_collective_max_pending', 1024),
+        arch_assignment('unified_interco_collective_alu_count', 'self.dma_bus_width'),
+        arch_assignment('unified_interco_collective_alu_latency', 1),
     ]
 
     for attr_name, attr_value in attrs.items():

@@ -18,6 +18,7 @@ class _RouterNode:
     next_input: int = 0
     next_output: int = 0
     component: UnifiedRouter | None = None
+    output_clusters: dict[int, int] = None
 
 
 class FatTreeInterconnect(gvsoc.systree.Component):
@@ -33,6 +34,10 @@ class FatTreeInterconnect(gvsoc.systree.Component):
         self.link_width = getattr(arch, 'unified_interco_link_width', arch.dma_bus_width)
         self.link_pending_size = getattr(arch, 'unified_interco_link_pending_size', arch.dma_write_buffer_size)
         self.router_pending_size = getattr(arch, 'unified_interco_router_pending_size', arch.dma_write_buffer_size)
+        self.collective_buffer_size = getattr(arch, 'unified_interco_collective_buffer_size', 65536)
+        self.collective_max_pending = getattr(arch, 'unified_interco_collective_max_pending', 1024)
+        self.collective_alu_count = getattr(arch, 'unified_interco_collective_alu_count', self.link_width)
+        self.collective_alu_latency = getattr(arch, 'unified_interco_collective_alu_latency', 1)
 
         self._sanity_check_basic()
 
@@ -97,6 +102,7 @@ class FatTreeInterconnect(gvsoc.systree.Component):
             coord=coord,
             router_id=len(self.node_order),
             routes=[-1] * self.num_cluster,
+            output_clusters={},
         )
         self.nodes[key] = node
         self.node_order.append(node)
@@ -154,6 +160,7 @@ class FatTreeInterconnect(gvsoc.systree.Component):
         self._router_to_link_bindings.append((leaf, out_port, downlink))
         downlink.o_OUTPUT(gvsoc.systree.SlaveItf(self, f'cluster_{cluster_id}_out', signature='io'))
         self._graph[leaf.name].append((self._cluster_sink(cluster_id), out_port))
+        leaf.output_clusters[out_port] = cluster_id
 
     def _cluster_sink(self, cluster_id: int) -> str:
         return f'cluster_{cluster_id}'
@@ -250,6 +257,10 @@ class FatTreeInterconnect(gvsoc.systree.Component):
 
     def _instantiate_routers(self):
         for node in self.node_order:
+            output_clusters = [-1] * self.radix
+            for port, cluster_id in node.output_clusters.items():
+                if port < self.radix:
+                    output_clusters[port] = cluster_id
             node.component = UnifiedRouter(
                 self,
                 node.name,
@@ -258,7 +269,12 @@ class FatTreeInterconnect(gvsoc.systree.Component):
                 num_cluster=self.num_cluster,
                 cluster_stride=self.cluster_stride,
                 routes=node.routes,
+                output_clusters=output_clusters,
                 max_input_pending_size=self.router_pending_size,
+                collective_buffer_size=self.collective_buffer_size,
+                collective_max_pending=self.collective_max_pending,
+                collective_alu_count=self.collective_alu_count,
+                collective_alu_latency=self.collective_alu_latency,
             )
 
         for node, port, link in self._router_to_link_bindings:

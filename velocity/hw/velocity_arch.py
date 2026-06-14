@@ -43,6 +43,10 @@ class VelocityArch:
         self.unified_interco_link_width          = self.dma_bus_width
         self.unified_interco_link_pending_size   = self.dma_write_buffer_size
         self.unified_interco_router_pending_size = self.dma_write_buffer_size
+        self.unified_interco_collective_buffer_size = 65536
+        self.unified_interco_collective_max_pending = 1024
+        self.unified_interco_collective_alu_count = self.dma_bus_width
+        self.unified_interco_collective_alu_latency = 1
 
         # Default fat-tree parameters. Other topology parameters should be set
         # by topology-specific arch files or generated regression arch files.

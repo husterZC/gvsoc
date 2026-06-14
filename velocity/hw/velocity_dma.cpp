@@ -25,6 +25,7 @@
 #include <vp/vp.hpp>
 #include <vp/itf/io.hpp>
 
+#include "collective_packet.hpp"
 #include "packet_trace.hpp"
 
 namespace {
@@ -51,6 +52,18 @@ constexpr uint64_t REG_PROBE_DST      = 0x48;
 constexpr uint64_t REG_TWO_SEND       = 0x4c;
 constexpr uint64_t REG_TWO_RECV       = 0x50;
 constexpr uint64_t REG_TWO_SENDRECV   = 0x54;
+constexpr uint64_t REG_COLL_OP        = 0x58;
+constexpr uint64_t REG_COLL_GROUP     = 0x5c;
+constexpr uint64_t REG_COLL_ROOT      = 0x60;
+constexpr uint64_t REG_COLL_SEQ       = 0x64;
+constexpr uint64_t REG_COLL_GROUP_BASE         = 0x68;
+constexpr uint64_t REG_COLL_GROUP_COUNT        = 0x6c;
+constexpr uint64_t REG_COLL_GROUP_STRIDE       = 0x70;
+constexpr uint64_t REG_COLL_GROUP_OUTER_COUNT  = 0x74;
+constexpr uint64_t REG_COLL_GROUP_OUTER_STRIDE = 0x78;
+constexpr uint64_t REG_COLL_SEND      = 0x7c;
+constexpr uint64_t REG_COLL_RECV      = 0x80;
+constexpr uint64_t REG_COLL_SENDRECV  = 0x84;
 
 constexpr uint32_t CMD_REMOTE_CLUSTER_MASK = 0x0000ffff;
 constexpr uint32_t CMD_TYPE_SHIFT = 16;
@@ -85,6 +98,7 @@ constexpr uint32_t REMOTE_PHASE_READ_REQ = 1;
 constexpr uint32_t REMOTE_PHASE_READ_RESP = 2;
 constexpr uint32_t REMOTE_PHASE_LATENCY_PROBE = 3;
 constexpr uint32_t REMOTE_PHASE_TWO_SEND = 4;
+constexpr uint32_t REMOTE_PHASE_INNETWORK_COLLECTIVE = 5;
 
 struct RemoteHeader
 {
@@ -148,11 +162,13 @@ private:
     };
 
     struct BlockingOp;
+    struct CollectiveOp;
 
     struct OutgoingPacket
     {
         Txn *txn;
         BlockingOp *blocking_op = NULL;
+        CollectiveOp *collective_op = NULL;
         uint32_t phase;
         uint32_t dst_cluster;
         uint64_t completion_latency;
@@ -197,6 +213,31 @@ private:
         vp::ClockEvent *event;
     };
 
+    struct CollectiveOp
+    {
+        uint32_t packet_id;
+        velocity::InNetworkHeader header;
+        uint32_t send_offset;
+        uint32_t recv_offset;
+        uint32_t send_size;
+        uint32_t recv_size;
+        uint32_t expected_recv;
+        uint32_t received;
+        bool wait_send;
+        bool wait_recv;
+        bool send_done;
+        bool recv_done;
+        uint32_t error;
+        vp::IoReq *regs_req;
+        std::vector<uint8_t> send_buffer;
+    };
+
+    struct PendingCollectivePacket
+    {
+        vp::IoReq *req;
+        velocity::InNetworkHeader header;
+    };
+
     static vp::IoReqStatus regs_req(vp::Block *__this, vp::IoReq *req);
     static vp::IoReqStatus remote_req(vp::Block *__this, vp::IoReq *req);
     static void remote_grant(vp::Block *__this, vp::IoReq *req);
@@ -236,6 +277,15 @@ private:
     bool handle_two_sided_send(vp::IoReq *req, const RemoteHeader &header);
     void schedule_two_sided_recv_completion(BlockingOp *op, vp::IoReq *remote_req, uint64_t cycles);
     void complete_two_sided_op(BlockingOp *op);
+    vp::IoReqStatus launch_collective(vp::IoReq *req, uint64_t command);
+    bool validate_collective(CollectiveOp *op);
+    bool start_collective_send(CollectiveOp *op);
+    bool handle_collective_packet(vp::IoReq *req, const velocity::InNetworkHeader &header);
+    bool match_collective_packet(CollectiveOp *op, vp::IoReq *remote_req,
+        const velocity::InNetworkHeader &header);
+    bool collective_headers_match(CollectiveOp *op, const velocity::InNetworkHeader &header);
+    void complete_collective_op(CollectiveOp *op);
+    uint32_t collective_payload_size(const velocity::InNetworkHeader &header);
     void finish_txn(Txn *txn, uint32_t status, uint32_t error);
     void launch_txn(uint32_t requested_id);
     void launch_packed_cmd(uint32_t cmd);
@@ -269,6 +319,15 @@ private:
     uint32_t query_id_reg = 0;
     uint32_t done_id_reg = 0;
     uint32_t last_error = DMA_ERROR_NONE;
+    uint32_t coll_op_reg = 0;
+    uint32_t coll_group_reg = 0;
+    uint32_t coll_root_reg = 0;
+    uint32_t coll_seq_reg = 0;
+    uint32_t coll_group_base_reg = 0;
+    uint32_t coll_group_count_reg = 0;
+    uint32_t coll_group_stride_reg = 0;
+    uint32_t coll_group_outer_count_reg = 0;
+    uint32_t coll_group_outer_stride_reg = 0;
     uint32_t next_txn_id = 1;
     uint32_t last_probe_dst = 0;
     uint64_t last_probe_enter_cycle = 0;
@@ -282,8 +341,10 @@ private:
     std::unordered_map<PendingRemoteWrite *, std::unique_ptr<PendingRemoteWrite>> pending_remote_writes;
     std::unordered_map<BlockingOp *, std::unique_ptr<BlockingOp>> blocking_ops;
     std::unordered_map<PendingTwoSidedRecv *, std::unique_ptr<PendingTwoSidedRecv>> pending_two_sided_recvs;
+    std::unordered_map<CollectiveOp *, std::unique_ptr<CollectiveOp>> collective_ops;
     std::deque<BlockingOp *> posted_two_sided_recvs;
     std::deque<PendingTwoSidedSend> pending_two_sided_sends;
+    std::deque<PendingCollectivePacket> pending_collective_packets;
 };
 
 VelocityDma::VelocityDma(vp::ComponentConf &config)
@@ -580,6 +641,12 @@ void VelocityDma::complete_packet(OutgoingPacket *packet, vp::IoReqStatus status
             holder->blocking_op->send_done = true;
             this->complete_two_sided_op(holder->blocking_op);
         }
+        else if (holder->collective_op)
+        {
+            holder->collective_op->error = DMA_ERROR_REMOTE_ACCESS;
+            holder->collective_op->send_done = true;
+            this->complete_collective_op(holder->collective_op);
+        }
         else
         {
             this->last_error = DMA_ERROR_REMOTE_ACCESS;
@@ -591,6 +658,11 @@ void VelocityDma::complete_packet(OutgoingPacket *packet, vp::IoReqStatus status
     {
         holder->blocking_op->send_done = true;
         this->complete_two_sided_op(holder->blocking_op);
+    }
+    else if (holder->collective_op && holder->phase == REMOTE_PHASE_INNETWORK_COLLECTIVE)
+    {
+        holder->collective_op->send_done = true;
+        this->complete_collective_op(holder->collective_op);
     }
     else if (holder->txn && holder->phase == REMOTE_PHASE_WRITE)
     {
@@ -973,6 +1045,341 @@ void VelocityDma::complete_two_sided_op(BlockingOp *op)
     this->blocking_ops.erase(op);
 }
 
+uint32_t VelocityDma::collective_payload_size(const velocity::InNetworkHeader &header)
+{
+    uint32_t group_count = velocity::innetwork_group_count(header, this->num_cluster);
+    if ((header.flags & velocity::INNETWORK_FLAG_DIRECT) != 0 ||
+        header.op == velocity::INNETWORK_OP_BROADCAST ||
+        header.op == velocity::INNETWORK_OP_REDUCE_INT8_SUM ||
+        header.op == velocity::INNETWORK_OP_GATHER)
+    {
+        return header.bytes;
+    }
+    if (header.op == velocity::INNETWORK_OP_SCATTER ||
+        header.op == velocity::INNETWORK_OP_ALLTOALL)
+    {
+        return header.bytes * group_count;
+    }
+    return 0;
+}
+
+bool VelocityDma::validate_collective(CollectiveOp *op)
+{
+    uint32_t group_count = velocity::innetwork_group_count(op->header, this->num_cluster);
+    if (group_count == 0 ||
+        !velocity::innetwork_group_contains(op->header, this->cluster_id, this->num_cluster) ||
+        op->header.root_cluster >= this->num_cluster ||
+        !velocity::innetwork_group_contains(op->header, op->header.root_cluster, this->num_cluster))
+    {
+        op->error = DMA_ERROR_BAD_CLUSTER;
+        return false;
+    }
+
+    if (op->header.bytes == 0)
+    {
+        op->error = DMA_ERROR_BAD_SIZE;
+        return false;
+    }
+
+    if (op->wait_send && op->send_size != 0 && op->send_offset + op->send_size > this->tcdm_size)
+    {
+        op->error = DMA_ERROR_BAD_LOCAL_OFFSET;
+        return false;
+    }
+    if (op->wait_recv && op->recv_size != 0 && op->recv_offset + op->recv_size > this->tcdm_size)
+    {
+        op->error = DMA_ERROR_BAD_REMOTE_OFFSET;
+        return false;
+    }
+    if (op->wait_send && op->send_size > this->write_buffer_size)
+    {
+        op->error = DMA_ERROR_BUFFER_TOO_SMALL;
+        return false;
+    }
+    if (this->collective_ops.size() >= this->max_inflight)
+    {
+        op->error = DMA_ERROR_NO_SLOT;
+        return false;
+    }
+
+    return true;
+}
+
+bool VelocityDma::start_collective_send(CollectiveOp *op)
+{
+    op->send_buffer.resize(sizeof(velocity::InNetworkHeader) + op->send_size);
+    memcpy(op->send_buffer.data(), &op->header, sizeof(op->header));
+
+    Txn scratch;
+    scratch.id = op->packet_id;
+    scratch.type = DMA_TYPE_WRITE;
+    scratch.remote_cluster = op->header.root_cluster;
+    scratch.local_offset = op->send_offset;
+    scratch.remote_offset = op->recv_offset;
+    scratch.size = op->send_size;
+    scratch.status = DMA_STATUS_BUSY;
+    scratch.error = DMA_ERROR_NONE;
+    scratch.event = NULL;
+
+    uint64_t latency = 0;
+    if (!this->local_access(&scratch, "collective_tcdm_to_dma", op->send_offset, op->send_size,
+        op->send_buffer.data() + sizeof(velocity::InNetworkHeader), false, latency))
+    {
+        op->error = scratch.error;
+        op->send_done = true;
+        return false;
+    }
+
+    std::unique_ptr<OutgoingPacket> packet(new OutgoingPacket());
+    packet->txn = NULL;
+    packet->blocking_op = NULL;
+    packet->collective_op = op;
+    packet->phase = REMOTE_PHASE_INNETWORK_COLLECTIVE;
+    packet->dst_cluster = this->cluster_id;
+    packet->completion_latency = 0;
+    packet->data = op->send_buffer;
+    return this->schedule_packet_send(std::move(packet), latency);
+}
+
+bool VelocityDma::collective_headers_match(CollectiveOp *op, const velocity::InNetworkHeader &header)
+{
+    return op->header.op == header.op &&
+        op->header.group_type == header.group_type &&
+        op->header.root_cluster == header.root_cluster &&
+        op->header.seq == header.seq &&
+        op->header.offset == header.offset &&
+        op->header.bytes == header.bytes &&
+        op->header.group_base == header.group_base &&
+        op->header.group_count == header.group_count &&
+        op->header.group_stride == header.group_stride &&
+        op->header.group_outer_count == header.group_outer_count &&
+        op->header.group_outer_stride == header.group_outer_stride;
+}
+
+bool VelocityDma::match_collective_packet(
+    CollectiveOp *op,
+    vp::IoReq *remote_req,
+    const velocity::InNetworkHeader &header)
+{
+    if (!this->collective_headers_match(op, header))
+    {
+        return false;
+    }
+
+    uint32_t payload_size = remote_req->get_size() - sizeof(velocity::InNetworkHeader);
+    if (payload_size == 0 || header.offset + op->recv_size > this->tcdm_size)
+    {
+        op->error = DMA_ERROR_BAD_SIZE;
+        return false;
+    }
+
+    uint32_t write_offset = op->recv_offset;
+    if (header.op == velocity::INNETWORK_OP_ALLTOALL)
+    {
+        int rank = velocity::innetwork_group_rank(header, header.src_cluster, this->num_cluster);
+        if (rank < 0 || payload_size != header.bytes)
+        {
+            op->error = DMA_ERROR_BAD_SIZE;
+            return false;
+        }
+        write_offset = op->recv_offset + rank * header.bytes;
+    }
+    else if (payload_size != op->recv_size)
+    {
+        op->error = DMA_ERROR_BAD_SIZE;
+        return false;
+    }
+
+    if (write_offset + payload_size > this->tcdm_size)
+    {
+        op->error = DMA_ERROR_BAD_REMOTE_OFFSET;
+        return false;
+    }
+
+    Txn scratch;
+    scratch.id = header.seq;
+    scratch.type = DMA_TYPE_WRITE;
+    scratch.remote_cluster = header.src_cluster;
+    scratch.local_offset = write_offset;
+    scratch.remote_offset = header.offset;
+    scratch.size = payload_size;
+    scratch.status = DMA_STATUS_BUSY;
+    scratch.error = DMA_ERROR_NONE;
+    scratch.event = NULL;
+
+    uint64_t latency = 0;
+    if (!this->local_access(&scratch, "collective_dma_to_tcdm", write_offset, payload_size,
+        remote_req->get_data() + sizeof(velocity::InNetworkHeader), true, latency))
+    {
+        op->error = scratch.error;
+        return false;
+    }
+
+    op->received++;
+    if (op->received >= op->expected_recv)
+    {
+        op->recv_done = true;
+    }
+
+    this->schedule_remote_write_response(NULL, remote_req, latency);
+    this->complete_collective_op(op);
+    return true;
+}
+
+bool VelocityDma::handle_collective_packet(vp::IoReq *req, const velocity::InNetworkHeader &header)
+{
+    if (!req->get_is_write() ||
+        req->get_size() < sizeof(velocity::InNetworkHeader) + header.bytes ||
+        !velocity::innetwork_group_contains(header, this->cluster_id, this->num_cluster))
+    {
+        this->last_error = DMA_ERROR_REMOTE_ACCESS;
+        return false;
+    }
+
+    for (auto &entry: this->collective_ops)
+    {
+        CollectiveOp *op = entry.second.get();
+        if (op->wait_recv && !op->recv_done &&
+            this->match_collective_packet(op, req, header))
+        {
+            return true;
+        }
+    }
+
+    if (this->pending_collective_packets.size() >= this->max_inflight)
+    {
+        this->trace.fatal("DMA cluster %u collective pending receive overflow\n", this->cluster_id);
+    }
+
+    PendingCollectivePacket pending;
+    pending.req = req;
+    pending.header = header;
+    this->pending_collective_packets.push_back(pending);
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: collective_hold op=%s dst=%u src=%u pending=%u\n",
+        header.seq, velocity::innetwork_op_name(header.op), this->cluster_id, header.src_cluster,
+        (uint32_t)this->pending_collective_packets.size());
+    return true;
+}
+
+vp::IoReqStatus VelocityDma::launch_collective(vp::IoReq *req, uint64_t command)
+{
+    if (req->get_size() != 4)
+    {
+        return vp::IO_REQ_INVALID;
+    }
+
+    std::unique_ptr<CollectiveOp> holder(new CollectiveOp());
+    CollectiveOp *op = holder.get();
+    op->packet_id = this->allocate_txn_id();
+    op->header.magic = velocity::INNETWORK_MAGIC;
+    op->header.offset = this->remote_offset_reg;
+    op->header.bytes = this->size_reg;
+    op->header.seq = this->coll_seq_reg;
+    op->header.root_cluster = this->coll_root_reg;
+    op->header.src_cluster = this->cluster_id;
+    op->header.op = this->coll_op_reg;
+    op->header.group_type = this->coll_group_reg;
+    op->header.dtype = 0;
+    op->header.flags = 0;
+    op->header.group_base = this->coll_group_base_reg;
+    op->header.group_count = this->coll_group_count_reg;
+    op->header.group_stride = this->coll_group_stride_reg;
+    op->header.group_outer_count = this->coll_group_outer_count_reg;
+    op->header.group_outer_stride = this->coll_group_outer_stride_reg;
+    op->send_offset = this->local_offset_reg;
+    op->recv_offset = this->remote_offset_reg;
+    op->send_size = this->collective_payload_size(op->header);
+    op->recv_size = this->size_reg;
+    op->expected_recv = op->header.op == velocity::INNETWORK_OP_ALLTOALL ?
+        velocity::innetwork_group_count(op->header, this->num_cluster) : 1;
+    if (op->header.op == velocity::INNETWORK_OP_GATHER)
+    {
+        op->recv_size = this->size_reg * velocity::innetwork_group_count(op->header, this->num_cluster);
+    }
+    op->wait_send = command == REG_COLL_SEND || command == REG_COLL_SENDRECV;
+    op->wait_recv = command == REG_COLL_RECV || command == REG_COLL_SENDRECV;
+    op->send_done = !op->wait_send;
+    op->recv_done = !op->wait_recv;
+    op->received = 0;
+    op->error = DMA_ERROR_NONE;
+    op->regs_req = req;
+
+    if (!this->validate_collective(op))
+    {
+        this->last_error = op->error;
+        return vp::IO_REQ_OK;
+    }
+
+    this->last_error = DMA_ERROR_NONE;
+    this->collective_ops[op] = std::move(holder);
+
+    if (op->wait_recv)
+    {
+        for (auto it = this->pending_collective_packets.begin();
+             it != this->pending_collective_packets.end();)
+        {
+            if (this->match_collective_packet(op, it->req, it->header))
+            {
+                it = this->pending_collective_packets.erase(it);
+                if (this->collective_ops.find(op) == this->collective_ops.end())
+                {
+                    return vp::IO_REQ_PENDING;
+                }
+                if (op->recv_done)
+                {
+                    break;
+                }
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+
+    if (this->collective_ops.find(op) == this->collective_ops.end())
+    {
+        return vp::IO_REQ_PENDING;
+    }
+
+    if (op->wait_send && !this->start_collective_send(op))
+    {
+        auto it = this->collective_ops.find(op);
+        if (it != this->collective_ops.end())
+        {
+            this->last_error = op->error;
+            this->collective_ops.erase(it);
+        }
+        return vp::IO_REQ_OK;
+    }
+
+    this->complete_collective_op(op);
+    return vp::IO_REQ_PENDING;
+}
+
+void VelocityDma::complete_collective_op(CollectiveOp *op)
+{
+    if ((op->wait_send && !op->send_done) || (op->wait_recv && !op->recv_done))
+    {
+        return;
+    }
+
+    this->trace.msg(vp::Trace::LEVEL_TRACE,
+        "[%9u][DMA]: collective_complete op=%s cluster=%u error=%u\n",
+        op->packet_id, velocity::innetwork_op_name(op->header.op), this->cluster_id, op->error);
+
+    this->last_error = op->error;
+    if (op->regs_req)
+    {
+        op->regs_req->status = vp::IO_REQ_OK;
+        op->regs_req->get_resp_port()->resp(op->regs_req);
+        op->regs_req = NULL;
+    }
+
+    this->collective_ops.erase(op);
+}
+
 void VelocityDma::finish_txn(Txn *txn, uint32_t status, uint32_t error)
 {
     this->trace.msg(vp::Trace::LEVEL_TRACE,
@@ -1108,6 +1515,18 @@ vp::IoReqStatus VelocityDma::regs_req(vp::Block *__this, vp::IoReq *req)
             case REG_TYPE:           ok = _this->write_u32(req, _this->type_reg); break;
             case REG_TXN_ID:         ok = _this->write_u32(req, _this->txn_id_reg); break;
             case REG_QUERY_ID:       ok = _this->write_u32(req, _this->query_id_reg); break;
+            case REG_COLL_OP:        ok = _this->write_u32(req, _this->coll_op_reg); break;
+            case REG_COLL_GROUP:     ok = _this->write_u32(req, _this->coll_group_reg); break;
+            case REG_COLL_ROOT:      ok = _this->write_u32(req, _this->coll_root_reg); break;
+            case REG_COLL_SEQ:       ok = _this->write_u32(req, _this->coll_seq_reg); break;
+            case REG_COLL_GROUP_BASE:         ok = _this->write_u32(req, _this->coll_group_base_reg); break;
+            case REG_COLL_GROUP_COUNT:        ok = _this->write_u32(req, _this->coll_group_count_reg); break;
+            case REG_COLL_GROUP_STRIDE:       ok = _this->write_u32(req, _this->coll_group_stride_reg); break;
+            case REG_COLL_GROUP_OUTER_COUNT:  ok = _this->write_u32(req, _this->coll_group_outer_count_reg); break;
+            case REG_COLL_GROUP_OUTER_STRIDE: ok = _this->write_u32(req, _this->coll_group_outer_stride_reg); break;
+            case REG_COLL_SEND:      return _this->launch_collective(req, REG_COLL_SEND);
+            case REG_COLL_RECV:      return _this->launch_collective(req, REG_COLL_RECV);
+            case REG_COLL_SENDRECV:  return _this->launch_collective(req, REG_COLL_SENDRECV);
             case REG_TWO_SEND:       return _this->launch_two_sided(req, REG_TWO_SEND);
             case REG_TWO_RECV:       return _this->launch_two_sided(req, REG_TWO_RECV);
             case REG_TWO_SENDRECV:   return _this->launch_two_sided(req, REG_TWO_SENDRECV);
@@ -1152,6 +1571,15 @@ vp::IoReqStatus VelocityDma::regs_req(vp::Block *__this, vp::IoReq *req)
             case REG_TYPE:           ok = _this->read_u32(req, _this->type_reg); break;
             case REG_TXN_ID:         ok = _this->read_u32(req, _this->txn_id_reg); break;
             case REG_QUERY_ID:       ok = _this->read_u32(req, _this->query_id_reg); break;
+            case REG_COLL_OP:        ok = _this->read_u32(req, _this->coll_op_reg); break;
+            case REG_COLL_GROUP:     ok = _this->read_u32(req, _this->coll_group_reg); break;
+            case REG_COLL_ROOT:      ok = _this->read_u32(req, _this->coll_root_reg); break;
+            case REG_COLL_SEQ:       ok = _this->read_u32(req, _this->coll_seq_reg); break;
+            case REG_COLL_GROUP_BASE:         ok = _this->read_u32(req, _this->coll_group_base_reg); break;
+            case REG_COLL_GROUP_COUNT:        ok = _this->read_u32(req, _this->coll_group_count_reg); break;
+            case REG_COLL_GROUP_STRIDE:       ok = _this->read_u32(req, _this->coll_group_stride_reg); break;
+            case REG_COLL_GROUP_OUTER_COUNT:  ok = _this->read_u32(req, _this->coll_group_outer_count_reg); break;
+            case REG_COLL_GROUP_OUTER_STRIDE: ok = _this->read_u32(req, _this->coll_group_outer_stride_reg); break;
             case REG_STATUS:         ok = _this->read_u32(req, _this->get_status(_this->query_id_reg)); break;
             case REG_DONE_ID:        ok = _this->read_u32(req, _this->done_id_reg); break;
             case REG_ERROR:          ok = _this->read_u32(req, _this->last_error); break;
@@ -1174,6 +1602,17 @@ vp::IoReqStatus VelocityDma::regs_req(vp::Block *__this, vp::IoReq *req)
 vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
 {
     VelocityDma *_this = (VelocityDma *)__this;
+
+    if (req->get_size() >= sizeof(velocity::InNetworkHeader))
+    {
+        velocity::InNetworkHeader collective_header;
+        memcpy(&collective_header, req->get_data(), sizeof(collective_header));
+        if (collective_header.magic == velocity::INNETWORK_MAGIC)
+        {
+            return _this->handle_collective_packet(req, collective_header) ?
+                vp::IO_REQ_PENDING : vp::IO_REQ_INVALID;
+        }
+    }
 
     if (req->get_size() < sizeof(RemoteHeader))
     {

@@ -205,15 +205,10 @@ void UnifiedLink::grant(vp::Block *__this, vp::IoReq *req)
         _this->trace.msg(vp::Trace::LEVEL_TRACE,
             "link grant addr=0x%llx size=%u\n",
             (unsigned long long)req->get_addr(), (uint32_t)req->get_size());
+        _this->pending.push_front({req, _this->clock.get_cycles()});
+        _this->pending_size += req->get_size();
         _this->stalled_req = nullptr;
-        _this->next_send_cycle = _this->clock.get_cycles() + _this->transfer_cycles(req);
-        if (!_this->pending.empty())
-        {
-            int64_t cycles = _this->clock.get_cycles();
-            int64_t next_cycle = _this->pending.front().ready_cycle > _this->next_send_cycle ?
-                _this->pending.front().ready_cycle : _this->next_send_cycle;
-            _this->schedule(next_cycle - cycles);
-        }
+        _this->schedule();
     }
 }
 

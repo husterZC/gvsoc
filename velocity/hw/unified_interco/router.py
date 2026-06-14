@@ -11,7 +11,12 @@ class UnifiedRouter(gvsoc.systree.Component):
         num_cluster: int,
         cluster_stride: int,
         routes: list[int],
+        output_clusters: list[int] | None = None,
         max_input_pending_size: int = 0,
+        collective_buffer_size: int = 65536,
+        collective_max_pending: int = 1024,
+        collective_alu_count: int = 0,
+        collective_alu_latency: int = 1,
     ):
         super().__init__(parent, name)
 
@@ -22,7 +27,12 @@ class UnifiedRouter(gvsoc.systree.Component):
             'num_cluster': num_cluster,
             'cluster_stride': cluster_stride,
             'routes': routes,
+            'output_clusters': output_clusters or [-1] * radix,
             'max_input_pending_size': max_input_pending_size,
+            'collective_buffer_size': collective_buffer_size,
+            'collective_max_pending': collective_max_pending,
+            'collective_alu_count': collective_alu_count,
+            'collective_alu_latency': collective_alu_latency,
         })
 
     def i_INPUT(self, port: int) -> gvsoc.systree.SlaveItf:

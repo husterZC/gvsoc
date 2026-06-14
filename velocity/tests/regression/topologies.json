@@ -1,6 +1,5 @@
 {
   "smoke": [
-    "flat_C2",
     "fat_tree_K4_L1",
     "mesh_2d_X2_Y2",
     "torus_2d_X3_Y2_wrap",
@@ -9,7 +8,6 @@
     "hypercube_D2"
   ],
   "full": [
-    "flat_C2",
     "fat_tree_K4_L1",
     "fat_tree_K8_L3",
     "mesh_2d_X2_Y2",

@@ -26,6 +26,18 @@
 #define VELOCITY_DMA_REG_TWO_SEND       0x4c
 #define VELOCITY_DMA_REG_TWO_RECV       0x50
 #define VELOCITY_DMA_REG_TWO_SENDRECV   0x54
+#define VELOCITY_DMA_REG_COLL_OP        0x58
+#define VELOCITY_DMA_REG_COLL_GROUP     0x5c
+#define VELOCITY_DMA_REG_COLL_ROOT      0x60
+#define VELOCITY_DMA_REG_COLL_SEQ       0x64
+#define VELOCITY_DMA_REG_COLL_GROUP_BASE         0x68
+#define VELOCITY_DMA_REG_COLL_GROUP_COUNT        0x6c
+#define VELOCITY_DMA_REG_COLL_GROUP_STRIDE       0x70
+#define VELOCITY_DMA_REG_COLL_GROUP_OUTER_COUNT  0x74
+#define VELOCITY_DMA_REG_COLL_GROUP_OUTER_STRIDE 0x78
+#define VELOCITY_DMA_REG_COLL_SEND      0x7c
+#define VELOCITY_DMA_REG_COLL_RECV      0x80
+#define VELOCITY_DMA_REG_COLL_SENDRECV  0x84
 
 #define VELOCITY_DMA_CMD_REMOTE_CLUSTER_MASK 0x0000ffffu
 #define VELOCITY_DMA_CMD_TYPE_SHIFT          16
@@ -43,6 +55,35 @@
 #define VELOCITY_DMA_STATUS_ERROR       3
 
 #define VELOCITY_DMA_ERROR_NONE         0
+
+#define VELOCITY_INNETWORK_OP_BROADCAST       1
+#define VELOCITY_INNETWORK_OP_REDUCE_INT8_SUM 2
+#define VELOCITY_INNETWORK_OP_SCATTER         3
+#define VELOCITY_INNETWORK_OP_GATHER          4
+#define VELOCITY_INNETWORK_OP_ALLTOALL        5
+
+#define VELOCITY_INNETWORK_GROUP_ALL                  0
+#define VELOCITY_INNETWORK_GROUP_CONTIGUOUS_RANGE     1
+#define VELOCITY_INNETWORK_GROUP_POWER2_ALIGNED_RANGE 2
+#define VELOCITY_INNETWORK_GROUP_STRIDE               3
+#define VELOCITY_INNETWORK_GROUP_NESTED_STRIDE        4
+
+typedef struct {
+    uint32_t type;
+    /*
+     * Compact group descriptor:
+     *   CONTIGUOUS_RANGE:     base, count
+     *   POWER2_ALIGNED_RANGE: base, log2_size in count
+     *   STRIDE:               base, count, stride
+     *   NESTED_STRIDE:        base, inner_count in count, inner_stride in stride,
+     *                         outer_count, outer_stride
+     */
+    uint32_t base;
+    uint32_t count;
+    uint32_t stride;
+    uint32_t outer_count;
+    uint32_t outer_stride;
+} velocity_innetwork_group_t;
 
 static inline volatile uint32_t *velocity_dma_reg(uint32_t offset)
 {
@@ -143,6 +184,70 @@ static inline uint32_t velocity_dma_sendrecv(
     *velocity_dma_reg(VELOCITY_DMA_REG_SIZE) = size;
     *velocity_dma_reg(VELOCITY_DMA_REG_TWO_SENDRECV) = 1;
 
+    return *velocity_dma_reg(VELOCITY_DMA_REG_ERROR);
+}
+
+static inline void velocity_dma_innetwork_config(
+    uint32_t op,
+    const velocity_innetwork_group_t *group,
+    uint32_t root,
+    uint32_t seq,
+    uint32_t send_offset,
+    uint32_t recv_offset,
+    uint32_t bytes)
+{
+    *velocity_dma_reg(VELOCITY_DMA_REG_COLL_OP) = op;
+    *velocity_dma_reg(VELOCITY_DMA_REG_COLL_GROUP) = group->type;
+    *velocity_dma_reg(VELOCITY_DMA_REG_COLL_ROOT) = root;
+    *velocity_dma_reg(VELOCITY_DMA_REG_COLL_SEQ) = seq;
+    *velocity_dma_reg(VELOCITY_DMA_REG_COLL_GROUP_BASE) = group->base;
+    *velocity_dma_reg(VELOCITY_DMA_REG_COLL_GROUP_COUNT) = group->count;
+    *velocity_dma_reg(VELOCITY_DMA_REG_COLL_GROUP_STRIDE) = group->stride;
+    *velocity_dma_reg(VELOCITY_DMA_REG_COLL_GROUP_OUTER_COUNT) = group->outer_count;
+    *velocity_dma_reg(VELOCITY_DMA_REG_COLL_GROUP_OUTER_STRIDE) = group->outer_stride;
+    *velocity_dma_reg(VELOCITY_DMA_REG_LOCAL_OFFSET) = send_offset;
+    *velocity_dma_reg(VELOCITY_DMA_REG_REMOTE_OFFSET) = recv_offset;
+    *velocity_dma_reg(VELOCITY_DMA_REG_SIZE) = bytes;
+}
+
+static inline uint32_t velocity_dma_innetwork_send(
+    uint32_t op,
+    const velocity_innetwork_group_t *group,
+    uint32_t root,
+    uint32_t seq,
+    uint32_t send_offset,
+    uint32_t recv_offset,
+    uint32_t bytes)
+{
+    velocity_dma_innetwork_config(op, group, root, seq, send_offset, recv_offset, bytes);
+    *velocity_dma_reg(VELOCITY_DMA_REG_COLL_SEND) = 1;
+    return *velocity_dma_reg(VELOCITY_DMA_REG_ERROR);
+}
+
+static inline uint32_t velocity_dma_innetwork_recv(
+    uint32_t op,
+    const velocity_innetwork_group_t *group,
+    uint32_t root,
+    uint32_t seq,
+    uint32_t recv_offset,
+    uint32_t bytes)
+{
+    velocity_dma_innetwork_config(op, group, root, seq, 0, recv_offset, bytes);
+    *velocity_dma_reg(VELOCITY_DMA_REG_COLL_RECV) = 1;
+    return *velocity_dma_reg(VELOCITY_DMA_REG_ERROR);
+}
+
+static inline uint32_t velocity_dma_innetwork_sendrecv(
+    uint32_t op,
+    const velocity_innetwork_group_t *group,
+    uint32_t root,
+    uint32_t seq,
+    uint32_t send_offset,
+    uint32_t recv_offset,
+    uint32_t bytes)
+{
+    velocity_dma_innetwork_config(op, group, root, seq, send_offset, recv_offset, bytes);
+    *velocity_dma_reg(VELOCITY_DMA_REG_COLL_SENDRECV) = 1;
     return *velocity_dma_reg(VELOCITY_DMA_REG_ERROR);
 }
 

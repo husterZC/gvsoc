@@ -165,17 +165,14 @@ vp::IoReqStatus VelocityCtrl::req(vp::Block *__this, vp::IoReq *req)
         else if (offset == REG_BARRIER_ARRIVE)
         {
             _this->barrier_count += 1;
+            _this->barrier_reqs.push_back(req);
             if (_this->barrier_count >= _this->num_cluster)
             {
                 _this->barrier_count = 0;
                 _this->barrier_phase += 1;
                 _this->barrier_release_event->enqueue(1);
             }
-            else
-            {
-                _this->barrier_reqs.push_back(req);
-                return vp::IO_REQ_PENDING;
-            }
+            return vp::IO_REQ_PENDING;
         }
         else
         {

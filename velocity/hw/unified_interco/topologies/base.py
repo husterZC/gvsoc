@@ -16,6 +16,7 @@ class RouterNode:
     next_input: int = 0
     next_output: int = 0
     component: UnifiedRouter | None = None
+    output_clusters: dict[int, int] = None
 
 
 class GraphTopologyInterconnect(gvsoc.systree.Component):
@@ -86,6 +87,7 @@ class GraphTopologyInterconnect(gvsoc.systree.Component):
             coord=coord,
             router_id=len(self.node_order),
             routes=[-1] * self.num_cluster,
+            output_clusters={},
         )
         self.nodes[name] = node
         self.node_order.append(node)
@@ -157,6 +159,7 @@ class GraphTopologyInterconnect(gvsoc.systree.Component):
         self._edge_ports[(router.name, sink)] = out_port
         self._graph[router.name].append((sink, out_port))
         self._cluster_router[cluster_id] = router
+        router.output_clusters[out_port] = cluster_id
 
     def _cluster_sink(self, cluster_id: int) -> str:
         return f'cluster_{cluster_id}'
@@ -313,6 +316,10 @@ class GraphTopologyInterconnect(gvsoc.systree.Component):
             )
 
         for node in self.node_order:
+            output_clusters = [-1] * radix
+            for port, cluster_id in node.output_clusters.items():
+                if port < radix:
+                    output_clusters[port] = cluster_id
             node.component = UnifiedRouter(
                 self,
                 node.name,
@@ -321,7 +328,12 @@ class GraphTopologyInterconnect(gvsoc.systree.Component):
                 num_cluster=self.num_cluster,
                 cluster_stride=self.cluster_stride,
                 routes=node.routes,
+                output_clusters=output_clusters,
                 max_input_pending_size=self.router_pending_size,
+                collective_buffer_size=getattr(self.arch, 'unified_interco_collective_buffer_size', 65536),
+                collective_max_pending=getattr(self.arch, 'unified_interco_collective_max_pending', 1024),
+                collective_alu_count=getattr(self.arch, 'unified_interco_collective_alu_count', self.link_width),
+                collective_alu_latency=getattr(self.arch, 'unified_interco_collective_alu_latency', 1),
             )
 
         for node, port, link in self._router_to_link_bindings:
