@@ -4,7 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 JOBS="${JOBS:-0}"
-TIMEOUT="${TIMEOUT:-7200}"
+TIMEOUT="${TIMEOUT:-600}"
+RUN_TARGET="${RUN_TARGET:-rund}"
 PROGRESS="${PROGRESS:-auto}"
 COLOR="${COLOR:-auto}"
 
@@ -30,4 +31,4 @@ if [ -f init.sh ]; then
     fi
 fi
 
-python3 "${SCRIPT_DIR}/run_matrix.py" --mode full --jobs "${JOBS}" --timeout "${TIMEOUT}" --progress "${PROGRESS}" --color "${COLOR}"
+python3 "${SCRIPT_DIR}/run_matrix.py" --mode full --jobs "${JOBS}" --timeout "${TIMEOUT}" --run-target "${RUN_TARGET}" --progress "${PROGRESS}" --color "${COLOR}"

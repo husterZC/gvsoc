@@ -21,7 +21,7 @@ class VelocityArch:
     def __init__(self):
 
         #Cluster
-        self.num_cluster                         = 128
+        self.num_cluster                         = 4
 
         self.cluster_num_lane                    = 512
         self.cluster_lane_width                  = 4
@@ -35,9 +35,9 @@ class VelocityArch:
         self.dma_base_latency                    = 1
         self.dma_cluster_stride                  = 0x00010000
 
-        # Default keeps the legacy flat DMA interconnect. Set unified_interco
-        # to a topology name to enable velocity.hw.unified_interco.
-        self.unified_interco                     = None
+        # The default app example exercises in-router collectives, so it needs
+        # the unified interconnect path enabled.
+        self.unified_interco                     = "fat_tree"
         self.unified_interco_topology            = "fat_tree"
         self.unified_interco_link_latency        = 1
         self.unified_interco_link_width          = self.dma_bus_width

@@ -30,3 +30,4 @@ tests/riscv-tests/
 **velocity_arch.inc
 sw_build
 velocity/tests/**/results/
+change.log

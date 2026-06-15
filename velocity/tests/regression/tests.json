@@ -61,6 +61,10 @@
       "suite": "topology_agnostic_tests/hardware_collective_innetwork",
       "app": "velocity/tests/topology_agnostic_tests/hardware_collective_innetwork/sw",
       "pass_regex": "HARDWARE_COLLECTIVE_INNETWORK_RESULT PASS",
+      "cmake_defs": {
+        "HARDWARE_COLLECTIVE_INNETWORK_TEST_MAX_EXHAUSTIVE_GROUP": 16,
+        "HARDWARE_COLLECTIVE_INNETWORK_TEST_MAX_PATTERN_GROUP": 16
+      },
       "comment": "Topology-agnostic in-router broadcast, reduce, scatter, gather, and all-to-all collectives."
     },
     "max_bandwidth_4B": {

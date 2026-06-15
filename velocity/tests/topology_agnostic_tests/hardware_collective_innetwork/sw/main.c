@@ -1,4 +1,5 @@
 #include "collective_innetwork.h"
+#include "hardware_collective_innetwork_test_config.h"
 
 #define INNETWORK_BYTES          4u
 #define INNETWORK_BCAST_OFFSET  0x1000u
@@ -30,6 +31,26 @@ static uint32_t floor_log2_u32(uint32_t value)
         result++;
     }
     return result;
+}
+
+static uint32_t capped_group_count(uint32_t requested, uint32_t cap)
+{
+    uint32_t count = requested;
+
+    if (cap != 0 && count > cap)
+    {
+        count = cap;
+    }
+    if (count > ARCH_NUM_CLUSTER)
+    {
+        count = ARCH_NUM_CLUSTER;
+    }
+    if (count < 1)
+    {
+        count = 1;
+    }
+
+    return count;
 }
 
 static void fill_bytes(uint32_t offset, uint8_t value, uint32_t bytes)
@@ -285,19 +306,36 @@ int main(void)
 {
     uint32_t cid = flex_get_core_id();
     uint32_t failed = 0;
-    uint32_t small_count = ARCH_NUM_CLUSTER < 2u ? ARCH_NUM_CLUSTER : 2u;
-    uint32_t stride_count = (ARCH_NUM_CLUSTER + 1u) / 2u;
+    uint32_t exhaustive_count = capped_group_count(
+        ARCH_NUM_CLUSTER, HARDWARE_COLLECTIVE_INNETWORK_TEST_MAX_EXHAUSTIVE_GROUP);
+    uint32_t pattern_count = capped_group_count(
+        ARCH_NUM_CLUSTER, HARDWARE_COLLECTIVE_INNETWORK_TEST_MAX_PATTERN_GROUP);
+    uint32_t small_count = exhaustive_count < 2u ? exhaustive_count : 2u;
+    uint32_t power2_count = 1u << floor_log2_u32(pattern_count);
+    uint32_t stride_count = capped_group_count(
+        (ARCH_NUM_CLUSTER + 1u) / 2u, HARDWARE_COLLECTIVE_INNETWORK_TEST_MAX_PATTERN_GROUP);
+    uint32_t stride_span = stride_count == 0 ? 0 : (stride_count - 1u) * 2u + 1u;
+    uint32_t status_count = exhaustive_count > power2_count ? exhaustive_count : power2_count;
+    status_count = status_count > stride_span ? status_count : stride_span;
+    status_count = capped_group_count(status_count, 0);
     uint32_t nested_outer = stride_count;
     uint32_t nested_inner = 1u;
     velocity_innetwork_group_t group;
 
-    collective_innetwork_group_init_all(&group);
+    if (exhaustive_count == ARCH_NUM_CLUSTER)
+    {
+        collective_innetwork_group_init_all(&group);
+    }
+    else
+    {
+        collective_innetwork_group_init_contiguous_range(&group, 0, exhaustive_count);
+    }
     failed |= run_group(&group, 10u, 1u);
 
     collective_innetwork_group_init_contiguous_range(&group, 0, small_count);
     failed |= run_group(&group, 20u, 2u);
 
-    collective_innetwork_group_init_power2_aligned_range(&group, 0, floor_log2_u32(small_count));
+    collective_innetwork_group_init_power2_aligned_range(&group, 0, floor_log2_u32(power2_count));
     failed |= run_broadcast_group(&group, 30u, 3u);
 
     collective_innetwork_group_init_stride_clusters(&group, 0, stride_count, 2);
@@ -307,7 +345,14 @@ int main(void)
         &group, 0, nested_inner, 1, nested_outer, 2);
     failed |= run_broadcast_group(&group, 50u, 5u);
 
-    collective_innetwork_group_init_all(&group);
+    if (status_count == ARCH_NUM_CLUSTER)
+    {
+        collective_innetwork_group_init_all(&group);
+    }
+    else
+    {
+        collective_innetwork_group_init_contiguous_range(&group, 0, status_count);
+    }
     volatile uint8_t *status_send = bytes_at(INNETWORK_STATUS_OFFSET);
     volatile uint8_t *status_recv = bytes_at(INNETWORK_STATUS_OFFSET + 4u);
     status_send[0] = failed ? 1u : 0u;

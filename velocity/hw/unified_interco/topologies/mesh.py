@@ -184,8 +184,8 @@ def _routing_mode(arch, topology_name: str, wrap: bool) -> str:
 
 
 def _check_ruche_dims(dims: tuple[int, ...], hop: int, topology_name: str):
-    if all(dim <= hop for dim in dims):
-        raise ValueError(f'{topology_name} requires at least one dimension larger than H={hop}')
+    if all(dim < hop for dim in dims):
+        raise ValueError(f'{topology_name} requires at least one dimension >= H={hop}')
 
 
 class Mesh2DInterconnect(CoordinateInterconnect):
