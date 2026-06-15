@@ -53,6 +53,8 @@ class GraphTopologyInterconnect(gvsoc.systree.Component):
         self._router_neighbors: dict[str, set[str]] = defaultdict(set)
         self._edge_ports: dict[tuple[str, str], int] = {}
         self._cluster_router: dict[int, RouterNode] = {}
+        self._collective_subtrees: dict[str, list[int]] = {}
+        self._collective_subtree_words_per_root = 0
 
     def _sanity_check_common(self):
         if self.num_cluster <= 0:
@@ -303,11 +305,67 @@ class GraphTopologyInterconnect(gvsoc.systree.Component):
                         f'uses output {output}, radix {self.effective_router_radix}'
                     )
 
+    def _compute_collective_subtrees(self):
+        """Derive root-oriented subtree masks from the already-built routes.
+
+        For a given root cluster R and router N, the mask contains every source
+        cluster whose route to R passes through N. The C++ router uses this to
+        know when an intermediate reduce/gather aggregate is complete. The
+        computation is topology-agnostic: it only follows each router's existing
+        route table.
+        """
+
+        self._collective_subtree_words_per_root = (self.num_cluster + 31) // 32
+        total_words = self.num_cluster * self._collective_subtree_words_per_root
+        self._collective_subtrees = {
+            node.name: [0] * total_words for node in self.node_order
+        }
+
+        next_by_output: dict[str, dict[int, str]] = {}
+        for node in self.node_order:
+            next_by_output[node.name] = {
+                port: dst for dst, port in self._graph.get(node.name, [])
+            }
+
+        for root_cluster in range(self.num_cluster):
+            root_sink = self._cluster_sink(root_cluster)
+            for src_cluster in range(self.num_cluster):
+                node = self._cluster_router[src_cluster]
+                visited = set()
+
+                while True:
+                    if node.name in visited:
+                        raise ValueError(
+                            f'{self.topology_name} route cycle while tracing '
+                            f'cluster {src_cluster} to root {root_cluster}'
+                        )
+                    visited.add(node.name)
+
+                    word_index = (
+                        root_cluster * self._collective_subtree_words_per_root +
+                        src_cluster // 32
+                    )
+                    self._collective_subtrees[node.name][word_index] |= 1 << (src_cluster % 32)
+
+                    output = node.routes[root_cluster]
+                    dst = next_by_output[node.name].get(output)
+                    if dst == root_sink:
+                        break
+                    if dst is None or dst.startswith('cluster_'):
+                        raise ValueError(
+                            f'{self.topology_name} route from {node.name} to root '
+                            f'{root_cluster} exits through invalid destination {dst}'
+                        )
+                    node = self.nodes[dst]
+
     @property
     def effective_router_radix(self) -> int:
         return self.router_radix or max(self.required_radix, 1)
 
     def _instantiate_routers(self):
+        if not self._collective_subtrees:
+            self._compute_collective_subtrees()
+
         radix = self.effective_router_radix
         if radix < self.required_radix:
             raise ValueError(
@@ -329,6 +387,8 @@ class GraphTopologyInterconnect(gvsoc.systree.Component):
                 cluster_stride=self.cluster_stride,
                 routes=node.routes,
                 output_clusters=output_clusters,
+                collective_subtree_words=self._collective_subtrees[node.name],
+                collective_subtree_words_per_root=self._collective_subtree_words_per_root,
                 max_input_pending_size=self.router_pending_size,
                 collective_buffer_size=getattr(self.arch, 'unified_interco_collective_buffer_size', 65536),
                 collective_max_pending=getattr(self.arch, 'unified_interco_collective_max_pending', 1024),

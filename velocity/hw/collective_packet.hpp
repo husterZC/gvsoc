@@ -23,6 +23,7 @@ constexpr uint8_t INNETWORK_GROUP_NESTED_STRIDE = 4;
 
 constexpr uint8_t INNETWORK_FLAG_DIRECT = 1 << 0;
 constexpr uint8_t INNETWORK_FLAG_FINAL = 1 << 1;
+constexpr uint8_t INNETWORK_FLAG_SUBSET = 1 << 2;
 
 struct InNetworkHeader
 {

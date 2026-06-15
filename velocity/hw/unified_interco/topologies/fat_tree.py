@@ -57,6 +57,9 @@ class FatTreeInterconnect(gvsoc.systree.Component):
         self._router_to_link_bindings: list[tuple[_RouterNode, int, UnifiedLink]] = []
         self._link_to_router_bindings: list[tuple[UnifiedLink, _RouterNode, int]] = []
         self._graph: dict[str, list[tuple[str, int]]] = defaultdict(list)
+        self._cluster_router: dict[int, _RouterNode] = {}
+        self._collective_subtrees: dict[str, list[int]] = {}
+        self._collective_subtree_words_per_root = 0
 
         if self.level == 1:
             self._build_level1()
@@ -161,6 +164,7 @@ class FatTreeInterconnect(gvsoc.systree.Component):
         downlink.o_OUTPUT(gvsoc.systree.SlaveItf(self, f'cluster_{cluster_id}_out', signature='io'))
         self._graph[leaf.name].append((self._cluster_sink(cluster_id), out_port))
         leaf.output_clusters[out_port] = cluster_id
+        self._cluster_router[cluster_id] = leaf
 
     def _cluster_sink(self, cluster_id: int) -> str:
         return f'cluster_{cluster_id}'
@@ -255,7 +259,57 @@ class FatTreeInterconnect(gvsoc.systree.Component):
                         f'Fat-tree router {node.name} has no next hop to cluster {cluster_id}'
                     )
 
+    def _compute_collective_subtrees(self):
+        self._collective_subtree_words_per_root = (self.num_cluster + 31) // 32
+        total_words = self.num_cluster * self._collective_subtree_words_per_root
+        self._collective_subtrees = {
+            node.name: [0] * total_words for node in self.node_order
+        }
+
+        next_by_output: dict[str, dict[int, str]] = {}
+        for node in self.node_order:
+            next_by_output[node.name] = {
+                port: dst for dst, port in self._graph.get(node.name, [])
+            }
+
+        for root_cluster in range(self.num_cluster):
+            root_sink = self._cluster_sink(root_cluster)
+            for src_cluster in range(self.num_cluster):
+                node = self._cluster_router[src_cluster]
+                visited = set()
+
+                while True:
+                    if node.name in visited:
+                        raise ValueError(
+                            f'Fat-tree route cycle while tracing cluster {src_cluster} '
+                            f'to root {root_cluster}'
+                        )
+                    visited.add(node.name)
+
+                    word_index = (
+                        root_cluster * self._collective_subtree_words_per_root +
+                        src_cluster // 32
+                    )
+                    self._collective_subtrees[node.name][word_index] |= 1 << (src_cluster % 32)
+
+                    output = node.routes[root_cluster]
+                    dst = next_by_output[node.name].get(output)
+                    if dst == root_sink:
+                        break
+                    if dst is None or dst.startswith('cluster_'):
+                        raise ValueError(
+                            f'Fat-tree route from {node.name} to root {root_cluster} '
+                            f'exits through invalid destination {dst}'
+                        )
+                    dst_node = next((candidate for candidate in self.node_order if candidate.name == dst), None)
+                    if dst_node is None:
+                        raise ValueError(f'Fat-tree route references unknown router {dst}')
+                    node = dst_node
+
     def _instantiate_routers(self):
+        if not self._collective_subtrees:
+            self._compute_collective_subtrees()
+
         for node in self.node_order:
             output_clusters = [-1] * self.radix
             for port, cluster_id in node.output_clusters.items():
@@ -270,6 +324,8 @@ class FatTreeInterconnect(gvsoc.systree.Component):
                 cluster_stride=self.cluster_stride,
                 routes=node.routes,
                 output_clusters=output_clusters,
+                collective_subtree_words=self._collective_subtrees[node.name],
+                collective_subtree_words_per_root=self._collective_subtree_words_per_root,
                 max_input_pending_size=self.router_pending_size,
                 collective_buffer_size=self.collective_buffer_size,
                 collective_max_pending=self.collective_max_pending,
