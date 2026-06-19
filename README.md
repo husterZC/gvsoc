@@ -141,14 +141,20 @@ Start the browser visualizer:
 make flowviz
 ```
 
-Then open the printed local URL. By default the browser opens with empty arch
-and trace fields plus a file picker rooted at `velocity/`, so you can choose or
-switch inputs without restarting FlowViz. The visualizer draws chips, clusters,
-and the configured on-chip/off-chip routers and links from `arch.py`, then
-overlays the packet movement observed in the trace. It supports play/pause,
-timeline scrubbing, speed control, zoom/pan, filters, and packet hover details. See
-[velocity/tools/flowviz/README.md](velocity/tools/flowviz/README.md) for
-details and JSON export commands.
+Then open:
+
+```text
+http://127.0.0.1:8765/
+```
+
+If you set `flowviz_port`, use that port instead. By default the browser opens
+with empty arch and trace fields plus a file picker rooted at `velocity/`, so
+you can choose or switch inputs without restarting FlowViz. The visualizer draws
+chips, clusters, and the configured on-chip/off-chip routers and links from
+`arch.py`, then overlays the packet movement observed in the trace. It supports
+play/pause, timeline scrubbing, speed control, zoom/pan, filters, and packet
+hover details. See [velocity/tools/flowviz/README.md](velocity/tools/flowviz/README.md)
+for details and JSON export commands.
 
 For a regression-generated multi-chip run, either choose the files in the
 browser or preload that cell's architecture and trace:

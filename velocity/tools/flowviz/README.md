@@ -21,8 +21,15 @@ source init.sh
 make flowviz
 ```
 
-Then open the printed local URL. The page starts with arch and trace fields plus
-a file picker rooted at the repository `velocity/` directory.
+Then open:
+
+```text
+http://127.0.0.1:8765/
+```
+
+If you start FlowViz with a different port, use that port instead. The page
+starts with arch and trace fields plus a file picker rooted at the repository
+`velocity/` directory.
 
 You can also start the module directly:
 
