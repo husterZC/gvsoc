@@ -30,6 +30,8 @@ make hw
 make sw
 make run
 make rund
+make runv
+make flowviz
 make clean_sw
 ```
 
@@ -44,7 +46,10 @@ make sw sw_build_dir=sw_build_max_bandwidth app=velocity/tests/topology_agnostic
 `make hw` copies the selected architecture into the generated Velocity target
 tree and builds the simulator model. `make sw` builds the selected software
 application. `make run` launches the simulator with the selected software build
-directory.
+directory. `make rund` enables detailed debug traces. `make runv` enables the
+lower-volume packet flow traces used by the visualizer and writes
+`packet_flow_trace.txt` into the selected software build directory. `make
+flowviz` starts the browser visualizer for that trace.
 
 ## Project Layout
 
@@ -52,13 +57,15 @@ directory.
   cluster system integration.
 - `velocity/hw/unified_interco/`: topology-agnostic unified router/link models
   plus topology builders in `topologies/`.
+- `velocity/tools/`: runnable Velocity helper tools, including configuration
+  generation and the browser-based packet flow visualizer for `runv` traces.
+  See [velocity/tools/README.md](velocity/tools/README.md) for organization.
 - `velocity/sw/`: default Velocity software application, runtime files, linker
   script, and CMake build entry point.
 - `velocity/tests/topology_agnostic_tests/`: reusable software tests that can run
   against any supported interconnect topology.
 - `velocity/tests/regression/`: topology/test matrix manifests, regression
   wrappers, colored progress runner, and result output.
-- `velocity/utils/`: configuration generation helpers used by the build flow.
 - `core/`, `gapy/`, `gvrun/`, `gvtest/`, `pulp/`, `pulpos/`: GVSOC framework,
   targets, launch tools, and PULP platform components.
 - `third_party/`: external dependencies and toolchain installation area.
@@ -68,10 +75,17 @@ directory.
 ## Architecture And Topologies
 
 The default architecture lives in
-[velocity/hw/velocity_arch.py](velocity/hw/velocity_arch.py). Leaving
-`self.unified_interco = None` keeps the legacy flat DMA interconnect. Set
-`self.unified_interco` to a topology name, or set it to `True` with
-`self.unified_interco_topology`, to instantiate the unified interconnect.
+[velocity/hw/velocity_arch.py](velocity/hw/velocity_arch.py). Velocity has
+separate on-chip and off-chip interconnect configuration:
+
+- `num_chip`: number of Velocity chips in the platform.
+- `num_cluster`: clusters per chip.
+- `onchip`: topology for cluster-to-cluster traffic inside each chip.
+- `offchip`: topology for chip-to-chip RDMA traffic.
+
+Each chip has its own on-chip unified interconnect. The platform-level off-chip
+interconnect also uses the unified router/link building blocks, with each chip's
+cluster 0 RDMA endpoint attached as the chip-to-chip initiator/receiver.
 
 Topology implementations live in
 [velocity/hw/unified_interco/topologies/](velocity/hw/unified_interco/topologies/).
@@ -92,6 +106,58 @@ Each topology builder checks its parameters and supports partial population when
 `num_cluster` is less than or equal to the topology endpoint capacity. See
 [velocity/hw/unified_interco/topologies/README.md](velocity/hw/unified_interco/topologies/README.md)
 for topology parameters and routing modes.
+
+## Packet Flow Traces And Visualization
+
+Use `make runv` to collect packet-level flow traces without enabling the full
+debug trace stream:
+
+```bash
+make hw
+make sw
+make runv
+```
+
+The trace is written to:
+
+```text
+sw_build/packet_flow_trace.txt
+```
+
+For the multi-chip RDMA regression case, the regression runner can build the
+generated multi-chip architecture and collect a `runv` trace in one step:
+
+```bash
+python3 velocity/tests/regression/run_matrix.py \
+  --mode smoke \
+  --test multi_chip_rdma \
+  --run-target runv \
+  --results tmp/flowviz_regression
+```
+
+Start the browser visualizer:
+
+```bash
+make flowviz
+```
+
+Then open the printed local URL. By default the browser opens with empty arch
+and trace fields plus a file picker rooted at `velocity/`, so you can choose or
+switch inputs without restarting FlowViz. The visualizer draws chips, clusters,
+and the configured on-chip/off-chip routers and links from `arch.py`, then
+overlays the packet movement observed in the trace. It supports play/pause,
+timeline scrubbing, speed control, zoom/pan, filters, and packet hover details. See
+[velocity/tools/flowviz/README.md](velocity/tools/flowviz/README.md) for
+details and JSON export commands.
+
+For a regression-generated multi-chip run, either choose the files in the
+browser or preload that cell's architecture and trace:
+
+```bash
+ARCH=$(find tmp/flowviz_regression -name 'velocity_arch_multi_chip_ring_N2_C4.py' | head -n 1)
+TRACE=$(find tmp/flowviz_regression -name packet_flow_trace.txt | head -n 1)
+make flowviz flowviz_arch="$ARCH" flowviz_trace="$TRACE"
+```
 
 ## Running Tests
 
@@ -135,6 +201,7 @@ python3 velocity/tests/regression/run_matrix.py --mode debug
 python3 velocity/tests/regression/run_matrix.py --mode full --test zero_load_latency
 python3 velocity/tests/regression/run_matrix.py --mode smoke --topology mesh_2d_X2_Y2
 python3 velocity/tests/regression/run_matrix.py --mode smoke --run-target rund
+python3 velocity/tests/regression/run_matrix.py --mode smoke --test multi_chip_rdma --run-target runv
 ```
 
 Results are written under:

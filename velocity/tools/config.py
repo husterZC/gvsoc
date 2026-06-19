@@ -6,7 +6,6 @@ parser.add_argument("input_file", nargs="?", default="velocity/hw/velocity_arch.
 args = parser.parse_args()
 input_file = args.input_file
 
-# Read the input Python file
 C_header_file = 'velocity/sw/runtime/include/velocity_arch.h'
 S_header_file = 'velocity/sw/runtime/include/velocity_arch.inc'
 

@@ -7,11 +7,13 @@ ifdef cfg
 	config_file = "$(cfg)"
 endif
 
+.PHONY: config hw sw clean_sw run rund runv flowviz
+
 config:
 	rm -rf pulp/pulp/chips/velocity
 	cp -rf velocity/hw pulp/pulp/chips/velocity
 	cp $(config_file) pulp/pulp/chips/velocity/velocity_arch.py
-	python3 velocity/utils/config.py $(config_file)
+	python3 velocity/tools/config.py $(config_file)
 
 hw:
 	make config
@@ -46,6 +48,15 @@ clean_sw:
 
 run_trace_args ?= --trace-level=trace --trace=chip_.*/cluster_.*/dma/trace --trace=chip_.*/cluster_0/rdma/trace --trace=chip_.*/cluster_.*/tcdm/dma_converter/trace --trace=chip_.*/onchip_interco/.*/trace --trace=offchip_interco/.*/trace
 runv_trace_args ?= --trace-level=trace --trace=chip_.*/cluster_.*/dma/flow --trace=chip_.*/cluster_0/rdma/flow --trace=chip_.*/onchip_interco/.*/flow --trace=offchip_interco/.*/flow
+flowviz_arch ?=
+flowviz_trace ?=
+flowviz_host ?= 127.0.0.1
+flowviz_port ?= 8765
+flowviz_open ?= 0
+flowviz_browser_arg := $(if $(filter 1 true yes,$(flowviz_open)),,--no-browser)
+flowviz_arch_arg := $(if $(flowviz_arch),--arch $(flowviz_arch),)
+flowviz_trace_arg := $(if $(flowviz_trace),--trace $(flowviz_trace),)
+flowviz_args ?=
 
 run:
 	./install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary $(sw_build_dir)/velocity.elf run
@@ -57,6 +68,9 @@ rund:
 runv:
 	mkdir -p $(sw_build_dir)
 	bash -o pipefail -c './install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary $(sw_build_dir)/velocity.elf run $(runv_trace_args) 2>&1 | tee $(sw_build_dir)/packet_flow_trace.txt'
+
+flowviz:
+	python3 -B -m velocity.tools.flowviz $(flowviz_arch_arg) $(flowviz_trace_arg) --host $(flowviz_host) --port $(flowviz_port) $(flowviz_browser_arg) $(flowviz_args)
 
 
 ######################################################################

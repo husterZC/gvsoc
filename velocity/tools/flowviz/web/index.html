@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Velocity FlowViz</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div id="app">
+      <aside class="sidebar">
+        <header>
+          <div class="eyebrow">Velocity</div>
+          <h1>Packet FlowViz</h1>
+        </header>
+
+        <section class="panel inputs">
+          <label for="archPath">Arch</label>
+          <div class="pathRow">
+            <input id="archPath" type="text" spellcheck="false" placeholder="velocity/hw/velocity_arch.py">
+            <button id="browseArchBtn" type="button">Browse</button>
+          </div>
+          <label for="tracePath">Trace</label>
+          <div class="pathRow">
+            <input id="tracePath" type="text" spellcheck="false" placeholder="sw_build/packet_flow_trace.txt">
+            <button id="browseTraceBtn" type="button">Browse</button>
+          </div>
+          <button id="loadFlowBtn" class="primary loadBtn" type="button">Load</button>
+          <div id="loadStatus" class="statusText"></div>
+        </section>
+
+        <section class="panel">
+          <div class="stat">
+            <span>Chips</span>
+            <strong id="chipCount">-</strong>
+          </div>
+          <div class="stat">
+            <span>Clusters / chip</span>
+            <strong id="clusterCount">-</strong>
+          </div>
+          <div class="stat">
+            <span>Packets</span>
+            <strong id="packetCount">-</strong>
+          </div>
+          <div class="stat">
+            <span>Segments</span>
+            <strong id="segmentCount">-</strong>
+          </div>
+        </section>
+
+        <section class="panel">
+          <label for="packetSearch">Packet</label>
+          <input id="packetSearch" type="search" placeholder="dma:0:1">
+          <label for="actionFilter">Action</label>
+          <select id="actionFilter">
+            <option value="">All actions</option>
+          </select>
+          <div class="checks">
+            <label><input id="showLabels" type="checkbox" checked> Labels</label>
+            <label><input id="showInactive" type="checkbox" checked> Inactive links</label>
+          </div>
+        </section>
+
+        <section class="panel legend">
+          <div><span class="swatch write"></span>write</div>
+          <div><span class="swatch read"></span>read</div>
+          <div><span class="swatch two"></span>two-sided</div>
+          <div><span class="swatch collective"></span>collective</div>
+        </section>
+      </aside>
+
+      <main class="main">
+        <div class="toolbar">
+          <button id="playBtn" class="primary" type="button">Play</button>
+          <button id="stepBackBtn" type="button">Step -</button>
+          <button id="stepFwdBtn" type="button">Step +</button>
+          <select id="speedSelect" title="Playback speed">
+            <option value="0.25">0.25x</option>
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="5">5x</option>
+            <option value="10">10x</option>
+            <option value="50">50x</option>
+          </select>
+          <button id="fitBtn" type="button">Fit</button>
+          <button id="zoomInBtn" type="button">Zoom +</button>
+          <button id="zoomOutBtn" type="button">Zoom -</button>
+          <div class="cycleReadout">Cycle <strong id="cycleText">0</strong></div>
+        </div>
+
+        <div class="timeline">
+          <input id="timeSlider" type="range" min="0" max="1" step="1" value="0">
+          <div class="rangeText">
+            <span id="startCycle">0</span>
+            <span id="endCycle">1</span>
+          </div>
+        </div>
+
+        <div class="canvasWrap">
+          <canvas id="flowCanvas"></canvas>
+          <div id="tooltip" class="tooltip hidden"></div>
+          <div id="emptyState" class="emptyState hidden">
+            <strong>No Trace Loaded</strong>
+            <span>Select an architecture and packet flow trace.</span>
+          </div>
+        </div>
+      </main>
+    </div>
+    <div id="fileModal" class="modal hidden">
+      <div class="modalPanel">
+        <div class="modalHeader">
+          <strong id="fileModalTitle">Browse</strong>
+          <button id="closeFileModalBtn" type="button">Close</button>
+        </div>
+        <div class="browserPathRow">
+          <button id="upDirBtn" type="button">Up</button>
+          <input id="browserPath" type="text" spellcheck="false">
+          <button id="goDirBtn" type="button">Go</button>
+        </div>
+        <div id="fileList" class="fileList"></div>
+      </div>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>
