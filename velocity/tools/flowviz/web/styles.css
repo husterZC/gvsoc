@@ -244,6 +244,16 @@ button.primary {
   background: #121821;
 }
 
+.activityCanvas {
+  display: block;
+  width: 100%;
+  height: 22px;
+  margin-bottom: 6px;
+  background: #0f141b;
+  border: 1px solid #273340;
+  border-radius: 6px;
+}
+
 input[type="range"] {
   width: 100%;
 }

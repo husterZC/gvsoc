@@ -2,6 +2,8 @@
 
 const canvas = document.getElementById("flowCanvas");
 const ctx = canvas.getContext("2d");
+const activityCanvas = document.getElementById("activityCanvas");
+const activityCtx = activityCanvas.getContext("2d");
 const tooltip = document.getElementById("tooltip");
 
 const ui = {
@@ -12,6 +14,7 @@ const ui = {
   fit: document.getElementById("fitBtn"),
   zoomIn: document.getElementById("zoomInBtn"),
   zoomOut: document.getElementById("zoomOutBtn"),
+  activity: activityCanvas,
   slider: document.getElementById("timeSlider"),
   cycle: document.getElementById("cycleText"),
   startCycle: document.getElementById("startCycle"),
@@ -92,6 +95,15 @@ function resizeCanvas() {
   draw();
 }
 
+function resizeActivityCanvas() {
+  const rect = ui.activity.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  ui.activity.width = Math.max(1, Math.floor(rect.width * dpr));
+  ui.activity.height = Math.max(1, Math.floor(rect.height * dpr));
+  activityCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawActivityBar();
+}
+
 function setStatus(message, kind = "") {
   ui.loadStatus.textContent = message;
   ui.loadStatus.classList.toggle("error", kind === "error");
@@ -109,6 +121,7 @@ function setStatsEmpty() {
   ui.startCycle.textContent = "0";
   ui.endCycle.textContent = "1";
   ui.cycle.textContent = "0";
+  drawActivityBar();
 }
 
 function clearActionFilter() {
@@ -450,14 +463,9 @@ function drawNodes() {
 }
 
 function activeSegments() {
-  const packetQuery = ui.packetSearch.value.trim();
-  const actionFilter = ui.actionFilter.value;
   return graph.segments.filter((segment) => {
     if (state.cycle < segment.start_cycle || state.cycle > segment.end_cycle) return false;
-    const packet = graph.packetsById.get(segment.packet_id);
-    if (packetQuery && !segment.packet_id.includes(packetQuery)) return false;
-    if (actionFilter && packet?.action !== actionFilter) return false;
-    return true;
+    return segmentPassesFilter(segment);
   });
 }
 
@@ -531,6 +539,75 @@ function drawPackets(segments) {
   return hits;
 }
 
+function segmentPassesFilter(segment) {
+  const packetQuery = ui.packetSearch.value.trim();
+  const actionFilter = ui.actionFilter.value;
+  const packet = graph?.packetsById.get(segment.packet_id);
+  if (packetQuery && !segment.packet_id.includes(packetQuery)) return false;
+  if (actionFilter && packet?.action !== actionFilter) return false;
+  return true;
+}
+
+function filteredSegments() {
+  if (!graph) return [];
+  return graph.segments.filter(segmentPassesFilter);
+}
+
+function drawActivityBar() {
+  const rect = ui.activity.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+  activityCtx.clearRect(0, 0, width, height);
+
+  activityCtx.fillStyle = "#0f141b";
+  activityCtx.fillRect(0, 0, width, height);
+  activityCtx.strokeStyle = "#273340";
+  activityCtx.lineWidth = 1;
+  activityCtx.strokeRect(0.5, 0.5, Math.max(0, width - 1), Math.max(0, height - 1));
+
+  if (!data || !graph || width <= 0 || height <= 0) {
+    return;
+  }
+
+  const start = data.time.start;
+  const end = data.time.end;
+  const span = Math.max(1, end - start);
+  const bins = Math.max(1, Math.min(Math.floor(width), 900));
+  const counts = new Array(bins).fill(0);
+
+  for (const segment of filteredSegments()) {
+    const segStart = Math.max(start, segment.start_cycle);
+    const segEnd = Math.max(segStart, Math.min(end, segment.end_cycle));
+    const first = Math.max(0, Math.min(bins - 1, Math.floor(((segStart - start) / span) * bins)));
+    const last = Math.max(first, Math.min(bins - 1, Math.ceil(((segEnd - start) / span) * bins)));
+    for (let index = first; index <= last; index++) {
+      counts[index] += 1;
+    }
+  }
+
+  const maxCount = Math.max(...counts, 1);
+  const binWidth = width / bins;
+  for (let index = 0; index < bins; index++) {
+    const count = counts[index];
+    if (!count) continue;
+    const density = count / maxCount;
+    const barHeight = Math.max(4, density * (height - 5));
+    const x = index * binWidth;
+    const y = height - barHeight - 2;
+    activityCtx.fillStyle = `rgba(79, 182, 255, ${0.35 + density * 0.55})`;
+    activityCtx.fillRect(x, y, Math.max(1, binWidth + 0.4), barHeight);
+  }
+
+  const t = Math.max(0, Math.min(1, (state.cycle - start) / span));
+  const markerX = t * width;
+  activityCtx.strokeStyle = "#f2c14e";
+  activityCtx.lineWidth = 2;
+  activityCtx.beginPath();
+  activityCtx.moveTo(markerX, 1);
+  activityCtx.lineTo(markerX, height - 1);
+  activityCtx.stroke();
+}
+
 function updateTooltip(hits) {
   let closest = null;
   let closestDist = Infinity;
@@ -591,6 +668,7 @@ function updateCycle(cycle) {
   ui.slider.value = String(Math.round(state.cycle));
   ui.cycle.textContent = String(Math.round(state.cycle));
   draw();
+  drawActivityBar();
 }
 
 function tick(now) {
@@ -638,6 +716,7 @@ function populateUi(model) {
     option.textContent = action;
     ui.actionFilter.appendChild(option);
   }
+  drawActivityBar();
 }
 
 async function loadFlowModel() {
@@ -665,6 +744,7 @@ async function loadFlowModel() {
     state.offsetY = 0;
     populateUi(data);
     resizeCanvas();
+    resizeActivityCanvas();
     fitView();
     updateCycle(data.time.start);
     setStatus("Loaded.", "ok");
@@ -674,6 +754,7 @@ async function loadFlowModel() {
     setStatsEmpty();
     clearActionFilter();
     draw();
+    drawActivityBar();
     setStatus(error.message || String(error), "error");
   } finally {
     ui.loadFlow.disabled = false;
@@ -688,6 +769,7 @@ async function loadInitialModel() {
   graph = buildGraph(data);
   populateUi(data);
   resizeCanvas();
+  resizeActivityCanvas();
   fitView();
   updateCycle(data.time.start);
   setStatus("Loaded.", "ok");
@@ -699,6 +781,7 @@ function showEmpty() {
   setStatsEmpty();
   clearActionFilter();
   draw();
+  drawActivityBar();
 }
 
 function pathParent(path) {
@@ -793,8 +876,14 @@ function bindControls() {
   ui.fit.addEventListener("click", fitView);
   ui.zoomIn.addEventListener("click", () => zoomAt({ x: canvas.parentElement.clientWidth / 2, y: canvas.parentElement.clientHeight / 2 }, 1.2));
   ui.zoomOut.addEventListener("click", () => zoomAt({ x: canvas.parentElement.clientWidth / 2, y: canvas.parentElement.clientHeight / 2 }, 1 / 1.2));
-  ui.packetSearch.addEventListener("input", draw);
-  ui.actionFilter.addEventListener("change", draw);
+  ui.packetSearch.addEventListener("input", () => {
+    draw();
+    drawActivityBar();
+  });
+  ui.actionFilter.addEventListener("change", () => {
+    draw();
+    drawActivityBar();
+  });
   ui.showLabels.addEventListener("change", draw);
   ui.showInactive.addEventListener("change", draw);
   ui.loadFlow.addEventListener("click", loadFlowModel);
@@ -845,7 +934,10 @@ function bindControls() {
     state.dragStart = null;
   });
 
-  window.addEventListener("resize", resizeCanvas);
+  window.addEventListener("resize", () => {
+    resizeCanvas();
+    resizeActivityCanvas();
+  });
 }
 
 async function init() {
@@ -855,6 +947,7 @@ async function init() {
   ui.tracePath.value = config.initial_trace || "";
   bindControls();
   resizeCanvas();
+  resizeActivityCanvas();
   if (config.has_initial_data) {
     await loadInitialModel();
   } else {
