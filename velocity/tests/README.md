@@ -8,6 +8,7 @@ row is a test type, and a regression column is a topology configuration.
 - `topology_agnostic_tests/read_after_write/sw`: all clusters write to all other clusters, then validate received data.
 - `topology_agnostic_tests/injection_rate/sw`: all-to-all traffic with an injection-gap control point.
 - `topology_agnostic_tests/max_bandwidth/sw`: one-way DMA bandwidth transfer.
+- `topology_agnostic_tests/multi_chip_rdma/sw`: chip 0 cluster 0 verifies RDMA write/read through the off-chip interconnect.
 - `topology_agnostic_tests/two_sided_test/sw`: native blocking DMA send, recv, and sendrecv checks.
 - `topology_agnostic_tests/software_collective_tree/sw`: logical tree collectives over two-sided DMA.
 - `topology_agnostic_tests/zero_load_latency/sw`: one probe from cluster 0 to each other active cluster.
@@ -27,12 +28,15 @@ max_bandwidth_4B              PASS              PASS           PASS
 two_sided_test                PASS              PASS           PASS
 software_collective_tree      PASS              PASS           PASS
 zero_load_latency             PASS              PASS           PASS
+multi_chip_rdma              NOT_RUN           NOT_RUN        NOT_RUN
 ```
 
 Topology names include their parameter names, for example `fat_tree_K4_L1`,
 `ruche_3d_X4_Y2_Z2_H2`, and `dragonfly_G2_A2_P1`. The regression runner
 generates architecture parameters from these names, so adding a normal case like
 `mesh_2d_X8_Y8` to `regression/topologies.json` is enough.
+Tests can also declare a narrow `topologies` list in `regression/tests.json`;
+the multi-chip RDMA row uses that to run only on its 2-chip off-chip ring case.
 
 ## Regression Entry Points
 

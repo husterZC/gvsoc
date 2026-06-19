@@ -20,6 +20,8 @@
 #define VELOCITY_CTRL_REG_BARRIER_ARRIVE  0x28
 #define VELOCITY_CTRL_REG_BARRIER_PHASE   0x2c
 #define VELOCITY_CTRL_REG_BARRIER_COUNT   0x30
+#define VELOCITY_CTRL_REG_CHIP_ID         0x34
+#define VELOCITY_CTRL_REG_NUM_CHIP        0x38
 
 static inline volatile uint32_t *velocity_ctrl_reg(uint32_t offset)
 {
@@ -50,6 +52,14 @@ uint32_t flex_get_core_id(){
     uint32_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
     return hartid;
+}
+
+uint32_t flex_chip_id(){
+    return *velocity_ctrl_reg(VELOCITY_CTRL_REG_CHIP_ID);
+}
+
+uint32_t flex_num_chip(){
+    return *velocity_ctrl_reg(VELOCITY_CTRL_REG_NUM_CHIP);
 }
 
 /*******************

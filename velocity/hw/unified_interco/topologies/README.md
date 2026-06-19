@@ -9,17 +9,27 @@ cluster endpoints, and a destination-indexed route table.
 Set one of the following in a `VelocityArch` file:
 
 ```python
-self.unified_interco = "torus_2d"
+self.onchip = "torus_2d"
 ```
 
 or:
 
 ```python
-self.unified_interco = True
-self.unified_interco_topology = "torus_2d"
+self.onchip = True
+self.onchip_topology = "torus_2d"
 ```
 
-Leaving `self.unified_interco = None` keeps the legacy flat DMA router.
+Leaving `self.onchip = None` keeps the legacy flat DMA router. Older
+`unified_interco_*` names are still accepted as on-chip aliases.
+
+The same topology builders are used for chip-to-chip RDMA. Configure that path
+with the short `offchip*` names:
+
+```python
+self.num_chip = 2
+self.offchip = "ring"
+self.offchip_ring_size = self.num_chip
+```
 
 ## Supported Names
 
@@ -40,24 +50,25 @@ accepted by the registry.
 ## Common Parameters
 
 ```python
-self.unified_interco_dims = (x, y)       # 2D families
-self.unified_interco_dims = (x, y, z)    # 3D families
-self.unified_interco_hop = 2             # Ruche H-hop distance
-self.unified_interco_ring_size = 16
-self.unified_interco_tree_radix = 4
-self.unified_interco_tree_level = 3
-self.unified_interco_hypercube_dims = 4
+self.onchip_dims = (x, y)       # 2D families
+self.onchip_dims = (x, y, z)    # 3D families
+self.onchip_hop = 2             # Ruche H-hop distance
+self.onchip_ring_size = 16
+self.onchip_tree_radix = 4
+self.onchip_tree_level = 3
+self.onchip_hypercube_dims = 4
 ```
 
-Topology-specific names such as `unified_interco_torus_2d_dims` and
-`unified_interco_ruche_3d_hop` override the common parameters.
+Topology-specific names such as `onchip_torus_2d_dims` and
+`onchip_ruche_3d_hop` override the common parameters. Use the same suffixes
+with `offchip_` to configure the chip-to-chip interconnect.
 
 Dragonfly uses:
 
 ```python
-self.unified_interco_dragonfly_groups = 4
-self.unified_interco_dragonfly_routers_per_group = 4
-self.unified_interco_dragonfly_terminals_per_router = 1
+self.onchip_dragonfly_groups = 4
+self.onchip_dragonfly_routers_per_group = 4
+self.onchip_dragonfly_terminals_per_router = 1
 ```
 
 The dragonfly graph connects routers fully inside each group and connects
@@ -82,8 +93,8 @@ dimension-order style routes by default.
 Torus and ring topologies default to:
 
 ```python
-self.unified_interco_torus_2d_routing = "wrap_tree"
-self.unified_interco_ring_routing = "wrap_tree"
+self.onchip_torus_2d_routing = "wrap_tree"
+self.onchip_ring_routing = "wrap_tree"
 ```
 
 `wrap_tree` routes over a deadlock-safe spanning tree chosen from the physical
@@ -93,9 +104,9 @@ the router model.
 For shortest wrap-around paths, use:
 
 ```python
-self.unified_interco_torus_2d_routing = "wrap_minimal"
-self.unified_interco_torus_3d_routing = "wrap_minimal"
-self.unified_interco_ring_routing = "wrap_minimal"
+self.onchip_torus_2d_routing = "wrap_minimal"
+self.onchip_torus_3d_routing = "wrap_minimal"
+self.onchip_ring_routing = "wrap_minimal"
 ```
 
 `wrap_minimal` uses wrap-around links aggressively. In a strict wormhole NoC
@@ -106,7 +117,7 @@ channel state.
 Dragonfly defaults to `tree` routing for the same reason. Set:
 
 ```python
-self.unified_interco_dragonfly_routing = "minimal"
+self.onchip_dragonfly_routing = "minimal"
 ```
 
 to use the deterministic local/global/local dragonfly route.

@@ -28,5 +28,17 @@
   "debug": [
     "fat_tree_K8_L3"
   ],
-  "topologies": {}
+  "topologies": {
+    "multi_chip_ring_N2_C4": {
+      "topology": "fat_tree",
+      "clusters": 4,
+      "attrs": {
+        "num_chip": 2,
+        "offchip": "ring",
+        "offchip_topology": "ring",
+        "offchip_ring_size": 2,
+        "offchip_ring_routing": "wrap_minimal"
+      }
+    }
+  }
 }

@@ -12,12 +12,13 @@ zero_load_latency            PASS        PASS        PASS
 two_sided_test               PASS        PASS        PASS
 software_collective_tree     PASS        PASS        PASS
 max_bandwidth_4B             PASS        PASS        PASS
+multi_chip_rdma             NOT_RUN     NOT_RUN      PASS
 ```
 
 ## Files
 
 - `topologies.json`: topology-column name lists plus optional parameter overrides.
-- `tests.json`: topology-agnostic test rows.
+- `tests.json`: topology-agnostic test rows and optional per-test topology filters.
 - `run_matrix.py`: Python matrix runner with colored row progress.
 - `run_smoke.sh`: small matrix wrapper.
 - `run_debug.sh`: single debug-case wrapper.
@@ -74,6 +75,10 @@ If `_C...` is omitted, the runner uses the topology capacity as the active
 cluster count. Add an entry to the optional `topologies` object only when a
 generated topology needs an override, for example a custom comment or a
 non-default arch attribute.
+
+Tests may set a `topologies` list in `tests.json` when a row needs a dedicated
+architecture. Those topologies are added to the selected mode automatically and
+unlisted test/topology cells are recorded as `NOT_RUN` in `matrix.csv`.
 
 ## Terminal Progress
 

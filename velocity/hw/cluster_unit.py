@@ -56,6 +56,7 @@ class ClusterArch:
     def __init__(
         self,  
         num_cluster,        cluster_id,
+        chip_id,            num_chip,
         num_lane,           lane_width,
         inst_base,          inst_size,
         tcdm_base,          tcdm_size,
@@ -68,10 +69,21 @@ class ClusterArch:
         dma_max_inflight_txn,
         dma_base_latency,
         dma_cluster_stride,
+        rdma_enabled=False,
+        rdma_reg_offset=0,
+        rdma_reg_size=0,
+        rdma_bus_width=0,
+        rdma_read_buffer_size=0,
+        rdma_write_buffer_size=0,
+        rdma_max_inflight_txn=0,
+        rdma_base_latency=0,
+        rdma_chip_stride=0,
         auto_fetch=False):
 
         self.num_cluster            = num_cluster
         self.cluster_id             = cluster_id
+        self.chip_id                = chip_id
+        self.num_chip               = num_chip
         self.num_lane               = num_lane
         self.lane_width             = lane_width
         self.inst_base              = inst_base
@@ -92,6 +104,15 @@ class ClusterArch:
         self.dma_max_inflight_txn   = dma_max_inflight_txn
         self.dma_base_latency       = dma_base_latency
         self.dma_cluster_stride     = dma_cluster_stride
+        self.rdma_enabled           = rdma_enabled
+        self.rdma_reg_offset        = rdma_reg_offset
+        self.rdma_reg_size          = rdma_reg_size
+        self.rdma_bus_width         = rdma_bus_width
+        self.rdma_read_buffer_size  = rdma_read_buffer_size
+        self.rdma_write_buffer_size = rdma_write_buffer_size
+        self.rdma_max_inflight_txn  = rdma_max_inflight_txn
+        self.rdma_base_latency      = rdma_base_latency
+        self.rdma_chip_stride       = rdma_chip_stride
         self.auto_fetch             = auto_fetch
 
 
@@ -111,6 +132,9 @@ class ClusterTcdm(gvsoc.systree.Component):
             nb_masters=nb_masters, interleaving_bits=int(math.log2(arch.lane_width)))
         dma_converter = DmaConverter(self, 'dma_converter', nb_banks=nb_banks,
             interleaving_bits=int(math.log2(arch.lane_width)))
+        dma_router = router.Router(self, 'dma_router', bandwidth=arch.dma_bus_width)
+        dma_router.i_INPUT(0)
+        dma_router.i_INPUT(1)
 
         for i in range(0, nb_banks):
             self.bind(interleaver, 'out_%d' % i, banks[i], 'input')
@@ -118,13 +142,16 @@ class ClusterTcdm(gvsoc.systree.Component):
 
         for i in range(0, nb_masters):
             self.bind(self, f'in_{i}', interleaver, f'in_{i}')
-        self.bind(self, 'dma', dma_converter, 'input')
+        dma_router.o_MAP(dma_converter.i_INPUT())
+        self.bind(self, 'dma', dma_router, 'input')
+        self.bind(self, 'dma_1', dma_router, 'input_1')
 
     def i_INPUT(self, port: int) -> gvsoc.systree.SlaveItf:
         return gvsoc.systree.SlaveItf(self, f'in_{port}', signature='io')
 
-    def i_DMA(self) -> gvsoc.systree.SlaveItf:
-        return gvsoc.systree.SlaveItf(self, 'dma', signature='io')
+    def i_DMA(self, port: int = 0) -> gvsoc.systree.SlaveItf:
+        port_name = 'dma' if port == 0 else f'dma_{port}'
+        return gvsoc.systree.SlaveItf(self, port_name, signature='io')
 
 
 
@@ -183,6 +210,21 @@ class ClusterUnit(gvsoc.systree.Component):
             base_latency=arch.dma_base_latency,
             cluster_stride=arch.dma_cluster_stride,
         )
+        rdma = None
+        if arch.rdma_enabled:
+            rdma = VelocityDma(
+                self,
+                'rdma',
+                cluster_id=arch.chip_id,
+                num_cluster=arch.num_chip,
+                tcdm_size=arch.tcdm_size,
+                bus_width=arch.rdma_bus_width,
+                max_inflight=arch.rdma_max_inflight_txn,
+                read_buffer_size=arch.rdma_read_buffer_size,
+                write_buffer_size=arch.rdma_write_buffer_size,
+                base_latency=arch.rdma_base_latency,
+                cluster_stride=arch.rdma_chip_stride,
+            )
 
 
         #
@@ -209,9 +251,15 @@ class ClusterUnit(gvsoc.systree.Component):
         core_ico.o_MAP(stack_mem.i_INPUT(),            base=arch.stack_base,   size=arch.stack_size,   rm_base=True)
         core_ico.o_MAP(tcdm.i_INPUT(arch.num_lane),    base=arch.tcdm_base,    size=arch.tcdm_size,    rm_base=True)
         core_ico.o_MAP(dma.i_REGS(),                   base=arch.reg_base + arch.dma_reg_offset, size=arch.dma_reg_size, rm_base=True)
+        if rdma is not None:
+            core_ico.o_MAP(rdma.i_REGS(),              base=arch.reg_base + arch.rdma_reg_offset, size=arch.rdma_reg_size, rm_base=True)
         dma.o_TCDM(tcdm.i_DMA())
         self.bind(dma, 'remote_out', self, 'dma_remote_out')
         self.bind(self, 'dma_remote_in', dma, 'remote_in')
+        if rdma is not None:
+            rdma.o_TCDM(tcdm.i_DMA(1))
+            self.bind(rdma, 'remote_out', self, 'rdma_remote_out')
+            self.bind(self, 'rdma_remote_in', rdma, 'remote_in')
 
 
     def i_VIRTUAL_SOC(self) -> gvsoc.systree.SlaveItf:
@@ -225,3 +273,9 @@ class ClusterUnit(gvsoc.systree.Component):
 
     def o_DMA_REMOTE(self, itf: gvsoc.systree.SlaveItf):
         self.itf_bind('dma_remote_out', itf, signature='io')
+
+    def i_RDMA_REMOTE(self) -> gvsoc.systree.SlaveItf:
+        return gvsoc.systree.SlaveItf(self, 'rdma_remote_in', signature='io')
+
+    def o_RDMA_REMOTE(self, itf: gvsoc.systree.SlaveItf):
+        self.itf_bind('rdma_remote_out', itf, signature='io')

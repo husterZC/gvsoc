@@ -18,7 +18,7 @@ import gvsoc.systree
 
 class VelocityCtrl(gvsoc.systree.Component):
 
-    def __init__(self, parent: gvsoc.systree.Component, name: str, num_cluster: int):
+    def __init__(self, parent: gvsoc.systree.Component, name: str, num_cluster: int, chip_id: int = 0, num_chip: int = 1):
 
         super().__init__(parent, name)
 
@@ -26,7 +26,12 @@ class VelocityCtrl(gvsoc.systree.Component):
 
         self.add_properties({
             'num_cluster': num_cluster,
+            'chip_id': chip_id,
+            'num_chip': num_chip,
         })
 
     def i_INPUT(self) -> gvsoc.systree.SlaveItf:
         return gvsoc.systree.SlaveItf(self, 'input', signature='io')
+
+    def o_EOC(self, itf: gvsoc.systree.SlaveItf):
+        self.itf_bind('eoc', itf, signature='wire<uint32_t>')

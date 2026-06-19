@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2020 ETH Zurich and University of Bologna
+# Copyright (C) 2024 ETH Zurich and University of Bologna
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,16 +14,21 @@
 # limitations under the License.
 #
 
-# Author: Chi Zhang <chizhang@ethz.ch>
-
-import gvsoc.runner
 import gvsoc.systree
-from pulp.chips.velocity.velocity_chip import VelocityPlatform
 
-GAPY_TARGET = True
 
-class Target(gvsoc.runner.Target):
+class PlatformCtrl(gvsoc.systree.Component):
 
-    def __init__(self, parser, options):
-        super(Target, self).__init__(parser, options,
-            model=VelocityPlatform, description="Velocity Platform")
+    def __init__(self, parent: gvsoc.systree.Component, name: str, num_chip: int):
+
+        super().__init__(parent, name)
+
+        self.add_sources(['pulp/chips/velocity/platform_ctrl.cpp'])
+
+        self.add_properties({
+            'num_chip': num_chip,
+        })
+
+    def i_CHIP_EOC(self, chip_id: int) -> gvsoc.systree.SlaveItf:
+        return gvsoc.systree.SlaveItf(
+            self, f'chip_eoc_{chip_id}', signature='wire<uint32_t>')

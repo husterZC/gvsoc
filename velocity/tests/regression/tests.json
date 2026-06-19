@@ -4,6 +4,7 @@
     "injection_rate",
     "zero_load_latency",
     "two_sided_test",
+    "multi_chip_rdma",
     "software_collective_tree",
     "hardware_collective_innetwork",
     "max_bandwidth_4B"
@@ -13,6 +14,7 @@
     "injection_rate",
     "zero_load_latency",
     "two_sided_test",
+    "multi_chip_rdma",
     "software_collective_tree",
     "hardware_collective_innetwork",
     "max_bandwidth_4B",
@@ -46,6 +48,15 @@
       "app": "velocity/tests/topology_agnostic_tests/two_sided_test/sw",
       "pass_regex": "TWO_SIDED_RESULT PASS",
       "comment": "Native blocking send, recv, and sendrecv between cluster 0 and cluster n-1."
+    },
+    "multi_chip_rdma": {
+      "suite": "topology_agnostic_tests/multi_chip_rdma",
+      "app": "velocity/tests/topology_agnostic_tests/multi_chip_rdma/sw",
+      "pass_regex": "MULTI_CHIP_RDMA_RESULT PASS",
+      "topologies": [
+        "multi_chip_ring_N2_C4"
+      ],
+      "comment": "Cluster 0 on chip 0 verifies one-sided RDMA write/read through the off-chip unified interconnect."
     },
     "software_collective_tree": {
       "suite": "topology_agnostic_tests/software_collective_tree",

@@ -355,18 +355,29 @@ def arch_assignment(name, value, width=52):
     return '        self.{:<{}} = {}'.format(name, width, value)
 
 
+def short_interconnect_attrs(attrs, prefix='onchip'):
+    converted = {}
+    for name, value in attrs.items():
+        if name.startswith('unified_interco_'):
+            converted['{}_{}'.format(prefix, name[len('unified_interco_'):])] = value
+        else:
+            converted[name] = value
+    return converted
+
+
 def write_arch(path, topology_name, topology):
-    attrs = topology.get('attrs', {})
+    attrs = short_interconnect_attrs(topology.get('attrs', {}))
     topology_kind = topology.get('topology')
     clusters = topology['clusters']
 
-    unified_interco = 'None' if topology_kind is None else repr(topology_kind)
-    unified_topology = repr(topology_kind or 'flat')
+    onchip = 'None' if topology_kind is None else repr(topology_kind)
+    onchip_topology = repr(topology_kind or 'flat')
 
     lines = [
         'class VelocityArch:',
         '',
         '    def __init__(self):',
+        arch_assignment('num_chip', 1),
         arch_assignment('num_cluster', clusters),
         arch_assignment('cluster_num_lane', 512),
         arch_assignment('cluster_lane_width', 4),
@@ -378,20 +389,44 @@ def write_arch(path, topology_name, topology):
         arch_assignment('dma_max_inflight_txn', 256),
         arch_assignment('dma_base_latency', 1),
         arch_assignment('dma_cluster_stride', '0x00010000'),
-        arch_assignment('unified_interco', unified_interco),
-        arch_assignment('unified_interco_topology', unified_topology),
-        arch_assignment('unified_interco_link_latency', 1),
-        arch_assignment('unified_interco_link_width', 'self.dma_bus_width'),
-        arch_assignment('unified_interco_link_pending_size', 'self.dma_write_buffer_size'),
-        arch_assignment('unified_interco_router_pending_size', 'self.dma_write_buffer_size'),
-        arch_assignment('unified_interco_collective_buffer_size', 65536),
-        arch_assignment('unified_interco_collective_max_pending', 1024),
-        arch_assignment('unified_interco_collective_alu_count', 'self.dma_bus_width'),
-        arch_assignment('unified_interco_collective_alu_latency', 1),
+        arch_assignment('rdma_reg_offset', '0x00000200'),
+        arch_assignment('rdma_reg_size', '0x00000100'),
+        arch_assignment('rdma_bus_width', 'self.dma_bus_width'),
+        arch_assignment('rdma_read_buffer_size', 'self.dma_read_buffer_size'),
+        arch_assignment('rdma_write_buffer_size', 'self.dma_write_buffer_size'),
+        arch_assignment('rdma_max_inflight_txn', 'self.dma_max_inflight_txn'),
+        arch_assignment('rdma_base_latency', 'self.dma_base_latency'),
+        arch_assignment('rdma_chip_stride', '0x00010000'),
+        arch_assignment('onchip', onchip),
+        arch_assignment('onchip_topology', onchip_topology),
+        arch_assignment('onchip_link_latency', 1),
+        arch_assignment('onchip_link_width', 'self.dma_bus_width'),
+        arch_assignment('onchip_link_pending_size', 'self.dma_write_buffer_size'),
+        arch_assignment('onchip_router_pending_size', 'self.dma_write_buffer_size'),
+        arch_assignment('onchip_collective_buffer_size', 65536),
+        arch_assignment('onchip_collective_max_pending', 1024),
+        arch_assignment('onchip_collective_alu_count', 'self.dma_bus_width'),
+        arch_assignment('onchip_collective_alu_latency', 1),
+        arch_assignment('offchip', repr('ring')),
+        arch_assignment('offchip_topology', repr('ring')),
+        arch_assignment('offchip_link_latency', 1),
+        arch_assignment('offchip_link_width', 'self.rdma_bus_width'),
+        arch_assignment('offchip_link_pending_size', 'self.rdma_write_buffer_size'),
+        arch_assignment('offchip_router_pending_size', 'self.rdma_write_buffer_size'),
+        arch_assignment('offchip_collective_buffer_size', 65536),
+        arch_assignment('offchip_collective_max_pending', 1024),
+        arch_assignment('offchip_collective_alu_count', 'self.rdma_bus_width'),
+        arch_assignment('offchip_collective_alu_latency', 1),
+        arch_assignment('offchip_ring_size', 'self.num_chip'),
+        arch_assignment('offchip_tree_radix', 2),
+        arch_assignment('offchip_tree_level', 1),
     ]
 
     for attr_name, attr_value in attrs.items():
         lines.append(arch_assignment(attr_name, py_literal(attr_value)))
+
+    if 'num_chip' in attrs and 'offchip_ring_size' not in attrs:
+        lines.append(arch_assignment('offchip_ring_size', 'self.num_chip'))
 
     lines.extend([
         arch_assignment('cluster_tcdm_base', '0x00000000'),
@@ -401,7 +436,7 @@ def write_arch(path, topology_name, topology):
         arch_assignment('cluster_zomem_base', '0x18000000'),
         arch_assignment('cluster_zomem_size', '0x00020000'),
         arch_assignment('cluster_reg_base', '0x20000000'),
-        arch_assignment('cluster_reg_size', '0x00000200'),
+        arch_assignment('cluster_reg_size', '0x00000300'),
         arch_assignment('instruction_mem_base', '0x80000000'),
         arch_assignment('instruction_mem_size', '0x00010000'),
         arch_assignment('soc_register_base', '0x70000000'),
@@ -538,13 +573,13 @@ def truncate(value, width):
 
 
 class ProgressDisplay:
-    def __init__(self, tests, topologies, mode, color_mode):
+    def __init__(self, tests, test_totals, mode, color_mode):
         if mode == 'auto':
             mode = 'bar' if sys.stdout.isatty() else 'line'
         self.mode = mode
         self.use_color = color_enabled(color_mode)
         self.tests = [name for name, _ in tests]
-        self.total = len(topologies)
+        self.totals = test_totals
         self.rows = {}
         self.rendered = False
         for name in self.tests:
@@ -556,8 +591,8 @@ class ProgressDisplay:
                 'fail': 0,
             }
 
-    def start_hardware(self, topology_name):
-        for test_name in self.tests:
+    def start_hardware(self, topology_name, test_names):
+        for test_name in test_names:
             row = self.rows[test_name]
             row['current'] = topology_name
             row['status'] = 'HW'
@@ -586,13 +621,14 @@ class ProgressDisplay:
             sys.stdout.write('\n')
             sys.stdout.flush()
 
-    def progress_bar(self, done, width):
-        filled = int((done * width) / self.total) if self.total else width
+    def progress_bar(self, test_name, done, width):
+        total = self.totals.get(test_name, 0)
+        filled = int((done * width) / total) if total else width
         empty = width - filled
         bar = '#' * filled + '-' * empty
         if not self.use_color:
             return '[' + bar + ']'
-        if done == self.total:
+        if done == total:
             code = 'green'
         elif done == 0:
             code = 'yellow'
@@ -602,7 +638,8 @@ class ProgressDisplay:
 
     def format_line(self, test_name):
         row = self.rows[test_name]
-        pct = int((row['done'] * 100) / self.total) if self.total else 100
+        total = self.totals.get(test_name, 0)
+        pct = int((row['done'] * 100) / total) if total else 100
         test_text = colorize(self.use_color, 'cyan', truncate(test_name, 22).ljust(22))
         topo_text = colorize(self.use_color, 'magenta', truncate(row['current'], 28).ljust(28))
         status_code = 'green' if row['status'] == 'PASS' else 'red' if row['status'] not in ('WAIT', 'HW', 'RUN') else 'yellow'
@@ -612,7 +649,7 @@ class ProgressDisplay:
         return '[{}] [{}] {} {:3d}% [{} | {}] {}'.format(
             test_text,
             topo_text,
-            self.progress_bar(row['done'], 28),
+            self.progress_bar(test_name, row['done'], 28),
             pct,
             pass_text,
             fail_text,
@@ -664,6 +701,50 @@ def sort_rows(rows, tests, topologies):
     return sorted(rows, key=lambda row: (test_order[row['test']], topology_order[row['topology']]))
 
 
+def append_missing_topologies(topology_manifest, mode, base_topologies, tests, explicit_topologies):
+    if explicit_topologies:
+        return base_topologies
+
+    selected = {name for name, _ in base_topologies}
+    extra_names = []
+    for _, test in tests:
+        for topology_name in test.get('topologies', []):
+            if topology_name not in selected:
+                selected.add(topology_name)
+                extra_names.append(topology_name)
+
+    if not extra_names:
+        return base_topologies
+
+    return base_topologies + select_topologies(topology_manifest, mode, extra_names)
+
+
+def should_run_test_on_topology(test, topology_name, base_topology_names, explicit_topologies):
+    allowed = test.get('topologies')
+    if allowed is not None:
+        return topology_name in allowed
+    return explicit_topologies or topology_name in base_topology_names
+
+
+def runnable_tests_for_topology(tests, topology_name, base_topology_names, explicit_topologies):
+    return [
+        (test_name, test)
+        for test_name, test in tests
+        if should_run_test_on_topology(test, topology_name, base_topology_names, explicit_topologies)
+    ]
+
+
+def test_totals_for_progress(tests, topologies, base_topology_names, explicit_topologies):
+    totals = {}
+    for test_name, test in tests:
+        totals[test_name] = sum(
+            1
+            for topology_name, _ in topologies
+            if should_run_test_on_topology(test, topology_name, base_topology_names, explicit_topologies)
+        )
+    return totals
+
+
 def main():
     default_dir = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description='Run topology-by-test Velocity matrix regressions.')
@@ -688,8 +769,18 @@ def main():
     repo_root = repo_root_from_script()
     topology_manifest = load_json(args.topologies)
     test_manifest = load_json(args.tests)
-    topologies = select_topologies(topology_manifest, args.mode, args.topology)
     tests = select_entries(test_manifest, args.mode, 'tests', args.test)
+    base_topologies = select_topologies(topology_manifest, args.mode, args.topology)
+    explicit_topologies = args.topology is not None
+    topologies = append_missing_topologies(
+        topology_manifest,
+        args.mode,
+        base_topologies,
+        tests,
+        explicit_topologies,
+    )
+    base_topology_names = {name for name, _ in base_topologies}
+    test_totals = test_totals_for_progress(tests, topologies, base_topology_names, explicit_topologies)
     run_target = args.run_target or ('rund' if args.mode == 'debug' else None)
     row_workers = 1 if args.mode == 'debug' else (
         len(tests) if args.jobs <= 0 else max(1, min(args.jobs, len(tests)))
@@ -704,18 +795,27 @@ def main():
     run_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    progress = ProgressDisplay(tests, topologies, args.progress, args.color)
+    progress = ProgressDisplay(tests, test_totals, args.progress, args.color)
     progress.render()
 
     rows = []
     for topology_name, topology in topologies:
+        runnable_tests = runnable_tests_for_topology(
+            tests,
+            topology_name,
+            base_topology_names,
+            explicit_topologies,
+        )
+        if not runnable_tests:
+            continue
+
         arch_path = arch_dir / 'velocity_arch_{}.py'.format(topology_name)
         write_arch(arch_path, topology_name, topology)
-        progress.start_hardware(topology_name)
+        progress.start_hardware(topology_name, [name for name, _ in runnable_tests])
         hw = build_hardware(topology_name, arch_path, repo_root, log_dir, args.timeout)
 
         if hw['status'] != 'PASS':
-            for test_name, test in tests:
+            for test_name, test in runnable_tests:
                 rows.append({
                     'test': test_name,
                     'topology': topology_name,
@@ -731,7 +831,7 @@ def main():
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=row_workers) as executor:
             futures = {}
-            for test_name, test in tests:
+            for test_name, test in runnable_tests:
                 progress.start_test(test_name, topology_name)
                 future = executor.submit(
                     run_test_cell,

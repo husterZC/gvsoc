@@ -42,6 +42,8 @@ constexpr uint64_t REG_TIMER_HI        = 0x24;
 constexpr uint64_t REG_BARRIER_ARRIVE  = 0x28;
 constexpr uint64_t REG_BARRIER_PHASE   = 0x2c;
 constexpr uint64_t REG_BARRIER_COUNT   = 0x30;
+constexpr uint64_t REG_CHIP_ID         = 0x34;
+constexpr uint64_t REG_NUM_CHIP        = 0x38;
 
 } // namespace
 
@@ -77,9 +79,14 @@ private:
 
     vp::Trace               trace;
     vp::IoSlave             input_itf;
+    vp::WireMaster<uint32_t> eoc_itf;
     uint32_t                num_cluster;
+    uint32_t                chip_id;
+    uint32_t                num_chip;
     int64_t                 timer_start;
     int64_t                 all_eoc_conuter;
+    uint32_t                all_eoc_status;
+    bool                    all_eoc_reported;
     uint32_t                barrier_count;
     uint32_t                barrier_phase;
     std::vector<vp::IoReq *> barrier_reqs;
@@ -92,12 +99,17 @@ VelocityCtrl::VelocityCtrl(vp::ComponentConf &config)
     : vp::Component(config)
 {
     this->num_cluster = this->get_js_config()->get("num_cluster")->get_int();
+    this->chip_id = this->get_js_config()->get("chip_id")->get_int();
+    this->num_chip = this->get_js_config()->get("num_chip")->get_int();
 
     this->traces.new_trace("trace", &this->trace, vp::DEBUG);
     this->input_itf.set_req_meth(&VelocityCtrl::req);
     this->new_slave_port("input", &this->input_itf);
+    this->new_master_port("eoc", &this->eoc_itf);
     this->timer_start = 0;
     this->all_eoc_conuter = 0;
+    this->all_eoc_status = 0;
+    this->all_eoc_reported = false;
     this->barrier_count = 0;
     this->barrier_phase = 0;
     this->barrier_release_event = this->event_new(VelocityCtrl::barrier_release);
@@ -107,7 +119,9 @@ void VelocityCtrl::reset(bool active)
 {
     if (active)
     {
-        std::cout << "[SystemInfo]: num_cluster = " << this->num_cluster << std::endl;
+        std::cout << "[SystemInfo]: chip_id = " << this->chip_id
+                  << ", num_chip = " << this->num_chip
+                  << ", num_cluster = " << this->num_cluster << std::endl;
     }
 }
 
@@ -131,16 +145,18 @@ vp::IoReqStatus VelocityCtrl::req(vp::Block *__this, vp::IoReq *req)
         if (offset == REG_EOC)
         {
             // std::cout << "EOC register return value: 0x" << std::hex << value << std::endl;
-            _this->time.get_engine()->quit(0);
+            _this->eoc_itf.sync(value);
         }
         else if (offset == REG_EOC_ALL)
         {
             _this->all_eoc_conuter += 1;
+            _this->all_eoc_status |= value;
             // _this->trace.msg("Control registers access (offset: 0x%x, size: 0x%x, is_write: %d, data:%x)\n", offset, size, is_write, *(uint32_t *)data);
             printProgressBar(_this->all_eoc_conuter, _this->num_cluster);
-            if (_this->all_eoc_conuter >= _this->num_cluster)
+            if (_this->all_eoc_conuter >= _this->num_cluster && !_this->all_eoc_reported)
             {
-                _this->time.get_engine()->quit(0);
+                _this->all_eoc_reported = true;
+                _this->eoc_itf.sync(_this->all_eoc_status);
             }
         }
         else if (offset == REG_TIMER_START)
@@ -206,6 +222,12 @@ vp::IoReqStatus VelocityCtrl::req(vp::Block *__this, vp::IoReq *req)
             break;
         case REG_BARRIER_COUNT:
             *(uint32_t *)data = _this->barrier_count;
+            break;
+        case REG_CHIP_ID:
+            *(uint32_t *)data = _this->chip_id;
+            break;
+        case REG_NUM_CHIP:
+            *(uint32_t *)data = _this->num_chip;
             break;
         default:
             return vp::IO_REQ_INVALID;

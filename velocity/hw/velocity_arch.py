@@ -21,6 +21,7 @@ class VelocityArch:
     def __init__(self):
 
         #Cluster
+        self.num_chip                            = 1
         self.num_cluster                         = 4
 
         self.cluster_num_lane                    = 512
@@ -35,23 +36,46 @@ class VelocityArch:
         self.dma_base_latency                    = 1
         self.dma_cluster_stride                  = 0x00010000
 
+        self.rdma_reg_offset                     = 0x00000200
+        self.rdma_reg_size                       = 0x00000100
+        self.rdma_bus_width                      = self.dma_bus_width
+        self.rdma_read_buffer_size               = self.dma_read_buffer_size
+        self.rdma_write_buffer_size              = self.dma_write_buffer_size
+        self.rdma_max_inflight_txn               = self.dma_max_inflight_txn
+        self.rdma_base_latency                   = self.dma_base_latency
+        self.rdma_chip_stride                    = 0x00010000
+
         # The default app example exercises in-router collectives, so it needs
         # the unified interconnect path enabled.
-        self.unified_interco                     = "fat_tree"
-        self.unified_interco_topology            = "fat_tree"
-        self.unified_interco_link_latency        = 1
-        self.unified_interco_link_width          = self.dma_bus_width
-        self.unified_interco_link_pending_size   = self.dma_write_buffer_size
-        self.unified_interco_router_pending_size = self.dma_write_buffer_size
-        self.unified_interco_collective_buffer_size = 65536
-        self.unified_interco_collective_max_pending = 1024
-        self.unified_interco_collective_alu_count = self.dma_bus_width
-        self.unified_interco_collective_alu_latency = 1
+        self.onchip                              = "fat_tree"
+        self.onchip_topology                     = "fat_tree"
+        self.onchip_link_latency                 = 1
+        self.onchip_link_width                   = self.dma_bus_width
+        self.onchip_link_pending_size            = self.dma_write_buffer_size
+        self.onchip_router_pending_size          = self.dma_write_buffer_size
+        self.onchip_collective_buffer_size       = 65536
+        self.onchip_collective_max_pending       = 1024
+        self.onchip_collective_alu_count         = self.dma_bus_width
+        self.onchip_collective_alu_latency       = 1
 
         # Default fat-tree parameters. Other topology parameters should be set
         # by topology-specific arch files or generated regression arch files.
-        self.unified_interco_tree_radix          = 8
-        self.unified_interco_tree_level          = 3
+        self.onchip_tree_radix                   = 8
+        self.onchip_tree_level                   = 3
+
+        self.offchip                             = "ring"
+        self.offchip_topology                    = "ring"
+        self.offchip_link_latency                = 1
+        self.offchip_link_width                  = self.rdma_bus_width
+        self.offchip_link_pending_size           = self.rdma_write_buffer_size
+        self.offchip_router_pending_size         = self.rdma_write_buffer_size
+        self.offchip_collective_buffer_size      = 65536
+        self.offchip_collective_max_pending      = 1024
+        self.offchip_collective_alu_count        = self.rdma_bus_width
+        self.offchip_collective_alu_latency      = 1
+        self.offchip_ring_size                   = self.num_chip
+        self.offchip_tree_radix                  = 2
+        self.offchip_tree_level                  = 1
 
         self.cluster_tcdm_base                   = 0x00000000
         self.cluster_tcdm_size                   = 0x00100000
@@ -63,7 +87,7 @@ class VelocityArch:
         self.cluster_zomem_size                  = 0x00020000
 
         self.cluster_reg_base                    = 0x20000000
-        self.cluster_reg_size                    = 0x00000200
+        self.cluster_reg_size                    = 0x00000300
 
         self.instruction_mem_base                = 0x80000000
         self.instruction_mem_size                = 0x00010000
