@@ -44,7 +44,7 @@ clean_sw:
 ## 				Make Targets for Run Simulator		 				##
 ######################################################################
 
-run_trace_args ?= --trace-level=trace --trace=system/cluster_.*/dma/trace --trace=system/cluster_.*/tcdm/dma_converter/trace --trace=system/dma_interco/.*/trace
+run_trace_args ?= --trace-level=trace --trace=system/cluster_.*/dma/trace --trace=system/cluster_.*/tcdm/dma_converter/trace --trace=system/onchip_interco/.*/trace
 
 run:
 	./install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary $(sw_build_dir)/velocity.elf run

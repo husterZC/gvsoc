@@ -16,30 +16,23 @@
 
 # Author: Chi Zhang <chizhang@ethz.ch>
 
-import gvsoc.runner
-import cpu.iss.riscv as iss
 import memory.memory
 import interco.router as router
 from vp.clock_domain import Clock_domain
-import interco.router as router
-import utils.loader.loader
 import gvsoc.systree
 from pulp.chips.velocity.cluster_unit import ClusterUnit, ClusterArch
 from pulp.chips.velocity.unified_interco import create_interconnect
 from pulp.chips.velocity.velocity_ctrl import VelocityCtrl
 from pulp.chips.velocity.velocity_arch import VelocityArch
-import math
 
 class VelocitySystem(gvsoc.systree.Component):
 
-    def __init__(self, parent, name, parser):
+    def __init__(self, parent, name, parser, arch):
         super().__init__(parent, name)
 
         #################
         # Configuration #
         #################
-
-        arch = VelocityArch()
 
         # Get Binary
         binary = None
@@ -84,13 +77,13 @@ class VelocitySystem(gvsoc.systree.Component):
         virtual_interco = router.Router(self, 'virtual_interco', bandwidth=8)
 
         unified_interco = getattr(arch, 'unified_interco', None)
-        if unified_interco is not None:
-            dma_interco = create_interconnect(self, 'dma_interco', cluster_list, arch)
+        if unified_interco:
+            onchip_interco = create_interconnect(self, 'onchip_interco', cluster_list, arch)
         else:
             # DMA data router. DMA remote requests address clusters by cluster id.
-            dma_interco = router.Router(
+            onchip_interco = router.Router(
                 self,
-                'dma_interco',
+                'onchip_interco',
                 bandwidth=arch.dma_bus_width,
                 synchronous=False,
                 max_input_pending_size=arch.dma_write_buffer_size,
@@ -115,12 +108,12 @@ class VelocitySystem(gvsoc.systree.Component):
         #Clusters
         for cluster_id in range(arch.num_cluster):
             cluster_list[cluster_id].o_VIRTUAL_SOC(virtual_interco.i_INPUT())
-            if unified_interco is not None:
-                cluster_list[cluster_id].o_DMA_REMOTE(dma_interco.i_CLUSTER_INPUT(cluster_id))
-                dma_interco.o_CLUSTER_OUTPUT(cluster_id, cluster_list[cluster_id].i_DMA_REMOTE())
+            if unified_interco:
+                cluster_list[cluster_id].o_DMA_REMOTE(onchip_interco.i_CLUSTER_INPUT(cluster_id))
+                onchip_interco.o_CLUSTER_OUTPUT(cluster_id, cluster_list[cluster_id].i_DMA_REMOTE())
             else:
-                cluster_list[cluster_id].o_DMA_REMOTE(dma_interco.i_INPUT())
-                dma_interco.o_MAP(cluster_list[cluster_id].i_DMA_REMOTE(),
+                cluster_list[cluster_id].o_DMA_REMOTE(onchip_interco.i_INPUT())
+                onchip_interco.o_MAP(cluster_list[cluster_id].i_DMA_REMOTE(),
                                   base=cluster_id * arch.dma_cluster_stride,
                                   size=arch.dma_cluster_stride,
                                   rm_base=True)
@@ -133,8 +126,9 @@ class VelocityPlatform(gvsoc.systree.Component):
         super(VelocityPlatform, self).__init__(parent, name, options=options)
 
         arch  = VelocityArch()
-        clock = Clock_domain(self, 'clock', frequency=(1000000000 if not hasattr(arch, 'frequence') else arch.frequence))
+        frequency = getattr(arch, 'frequency', getattr(arch, 'frequence', 1000000000))
+        clock = Clock_domain(self, 'clock', frequency=frequency)
 
-        velocity_system = VelocitySystem(self, 'system', parser)
+        velocity_system = VelocitySystem(self, 'system', parser, arch)
 
         self.bind(clock, 'out', velocity_system, 'clock')
