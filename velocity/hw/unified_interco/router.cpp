@@ -12,6 +12,7 @@
 #include <vp/itf/io.hpp>
 
 #include "../collective_packet.hpp"
+#include "../packet_trace.hpp"
 
 class UnifiedRouter : public vp::Component
 {
@@ -82,7 +83,7 @@ private:
 
     vp::IoReqStatus handle_req(vp::IoReq *req, int port);
     vp::IoReqStatus handle_collective_req(vp::IoReq *req, int port);
-    void grant_waiting_input(InputPort &input);
+    void grant_waiting_input(InputPort &input, int input_id);
     void schedule();
     int route(vp::IoReq *req);
     int route_cluster(uint32_t cluster);
@@ -127,8 +128,12 @@ private:
     bool try_forward_output(int output_id);
     void accept_output_req(int port);
     void finish_req(vp::IoReq *req, vp::IoReqStatus status);
+    void trace_flow(const char *event, const char *direction, vp::IoReq *req,
+        int input, int output, vp::IoReqStatus status, bool has_dst = false,
+        uint32_t dst_cluster = 0);
 
     vp::Trace trace;
+    vp::Trace flow;
     std::vector<vp::IoSlave> input_itfs;
     std::vector<vp::IoMaster> output_itfs;
     std::vector<InputPort> inputs;
@@ -158,6 +163,7 @@ UnifiedRouter::UnifiedRouter(vp::ComponentConf &config)
     : vp::Component(config), fsm_event(this, UnifiedRouter::fsm_handler)
 {
     this->traces.new_trace("trace", &this->trace, vp::DEBUG);
+    this->traces.new_trace("flow", &this->flow, vp::DEBUG);
 
     this->router_id = this->get_js_config()->get("router_id")->get_int();
     this->radix = this->get_js_config()->get("radix")->get_int();
@@ -266,6 +272,37 @@ UnifiedRouter::UnifiedRouter(vp::ComponentConf &config)
     }
 }
 
+void UnifiedRouter::trace_flow(const char *event, const char *direction, vp::IoReq *req,
+    int input, int output, vp::IoReqStatus status, bool has_dst, uint32_t dst_cluster)
+{
+    velocity::PacketTraceInfo info;
+    velocity::packet_trace_decode(req, info);
+    if (has_dst)
+    {
+        info.dst_cluster = dst_cluster;
+        info.has_dst = true;
+    }
+
+    char id[96];
+    char src[16];
+    char dst[16];
+    char root[16];
+    velocity::packet_trace_format_id(info, id, sizeof(id));
+    velocity::packet_trace_format_node(info.has_src, info.src_cluster, src, sizeof(src));
+    velocity::packet_trace_format_node(info.has_dst, info.dst_cluster, dst, sizeof(dst));
+    velocity::packet_trace_format_node(info.has_root, info.root_cluster, root, sizeof(root));
+
+    this->flow.msg(vp::Trace::LEVEL_TRACE,
+        "FLOW event=%s dir=%s comp=router router=%d input=%d output=%d id=%s kind=%s src=%s dst=%s root=%s action=%s phase=%s op=%s addr=0x%llx size=%u payload=%u bytes=%u status=%s outstanding=%zu collective_pending=%zu\n",
+        event, direction, this->router_id, input, output, id,
+        velocity::packet_trace_kind_name(info.kind), src, dst, root,
+        velocity::packet_trace_action_name(info),
+        info.kind == velocity::PacketTraceInfo::KIND_DMA ? velocity::packet_phase_name(info.phase) : "none",
+        info.kind == velocity::PacketTraceInfo::KIND_COLLECTIVE ? velocity::innetwork_op_name(info.op) : "none",
+        (unsigned long long)info.addr, info.req_size, info.payload_size, info.bytes,
+        velocity::io_status_name(status), this->outstanding.size(), this->collective_packets.size());
+}
+
 vp::IoReqStatus UnifiedRouter::req(vp::Block *__this, vp::IoReq *req, int port)
 {
     return ((UnifiedRouter *)__this)->handle_req(req, port);
@@ -290,6 +327,8 @@ vp::IoReqStatus UnifiedRouter::handle_req(vp::IoReq *req, int port)
             "router=%d invalid input=%d addr=0x%llx size=%u is_write=%d\n",
             this->router_id, port, (unsigned long long)req->get_addr(),
             (uint32_t)req->get_size(), req->get_is_write());
+        this->trace_flow("enter", "req", req, port, output, vp::IO_REQ_INVALID);
+        this->trace_flow("exit", "resp", req, port, output, vp::IO_REQ_INVALID);
         req->status = vp::IO_REQ_INVALID;
         return vp::IO_REQ_INVALID;
     }
@@ -313,6 +352,7 @@ vp::IoReqStatus UnifiedRouter::handle_req(vp::IoReq *req, int port)
         (uint32_t)req->get_size(), req->get_is_write(), (long long)input.pending_size);
     input.pending.push_back(req);
     input.pending_size += req->get_size();
+    this->trace_flow("enter", "req", req, port, output, vp::IO_REQ_PENDING);
     this->schedule();
     return vp::IO_REQ_PENDING;
 }
@@ -788,6 +828,8 @@ void UnifiedRouter::collective_queue_packet(
         this->router_id, velocity::innetwork_op_name(header.op), dst_cluster, output,
         bitmap_size, payload_size, this->collective_packets.size(),
         (long long)this->collective_buffer_used);
+    this->trace_flow("enter", "generated", raw_req, input, output, vp::IO_REQ_PENDING,
+        true, dst_cluster);
     this->try_forward_output(output);
     this->schedule();
 }
@@ -1080,17 +1122,24 @@ vp::IoReqStatus UnifiedRouter::handle_collective_req(vp::IoReq *req, int port)
 {
     velocity::InNetworkHeader header;
     memcpy(&header, req->get_data(), sizeof(header));
+    this->trace_flow("enter", "req", req, port, -1, vp::IO_REQ_PENDING);
+
+    auto finish = [&](vp::IoReqStatus status) -> vp::IoReqStatus
+    {
+        this->trace_flow("exit", "resp", req, port, -1, status);
+        return status;
+    };
 
     if (port < 0 || port >= this->radix || header.root_cluster >= this->num_cluster ||
         header.src_cluster >= this->num_cluster)
     {
         req->status = vp::IO_REQ_INVALID;
-        return vp::IO_REQ_INVALID;
+        return finish(vp::IO_REQ_INVALID);
     }
 
     if ((header.flags & velocity::INNETWORK_FLAG_FINAL) != 0)
     {
-        return this->collective_route_direct(req, header, port);
+        return finish(this->collective_route_direct(req, header, port));
     }
 
     if ((header.flags & velocity::INNETWORK_FLAG_DIRECT) != 0)
@@ -1099,16 +1148,16 @@ vp::IoReqStatus UnifiedRouter::handle_collective_req(vp::IoReq *req, int port)
              header.op == velocity::INNETWORK_OP_GATHER) &&
             this->is_root_router(header))
         {
-            return this->collective_tree_aggregate(req, header, port);
+            return finish(this->collective_tree_aggregate(req, header, port));
         }
-        return this->collective_route_direct(req, header, port);
+        return finish(this->collective_route_direct(req, header, port));
     }
 
     if (header.op == velocity::INNETWORK_OP_BROADCAST ||
         header.op == velocity::INNETWORK_OP_SCATTER ||
         header.op == velocity::INNETWORK_OP_ALLTOALL)
     {
-        return this->collective_fanout_packet(req, header, port);
+        return finish(this->collective_fanout_packet(req, header, port));
     }
 
     if (header.op == velocity::INNETWORK_OP_REDUCE_INT8_SUM ||
@@ -1116,7 +1165,7 @@ vp::IoReqStatus UnifiedRouter::handle_collective_req(vp::IoReq *req, int port)
     {
         if (this->has_collective_subtrees() || this->is_root_router(header))
         {
-            return this->collective_tree_aggregate(req, header, port);
+            return finish(this->collective_tree_aggregate(req, header, port));
         }
 
         velocity::InNetworkHeader direct = header;
@@ -1125,14 +1174,14 @@ vp::IoReqStatus UnifiedRouter::handle_collective_req(vp::IoReq *req, int port)
         const uint8_t *payload = req->get_data() + sizeof(velocity::InNetworkHeader);
         this->collective_queue_packet(direct, payload, payload_size, header.root_cluster, port);
         req->status = vp::IO_REQ_OK;
-        return vp::IO_REQ_OK;
+        return finish(vp::IO_REQ_OK);
     }
 
     req->status = vp::IO_REQ_INVALID;
-    return vp::IO_REQ_INVALID;
+    return finish(vp::IO_REQ_INVALID);
 }
 
-void UnifiedRouter::grant_waiting_input(InputPort &input)
+void UnifiedRouter::grant_waiting_input(InputPort &input, int input_id)
 {
     while (!input.denied.empty())
     {
@@ -1146,6 +1195,7 @@ void UnifiedRouter::grant_waiting_input(InputPort &input)
         input.denied.pop_front();
         input.pending.push_back(req);
         input.pending_size += req->get_size();
+        this->trace_flow("enter", "req", req, input_id, this->route(req), vp::IO_REQ_PENDING);
         req->get_resp_port()->grant(req);
     }
 }
@@ -1185,6 +1235,7 @@ bool UnifiedRouter::try_forward_output(int output_id)
         this->router_id, queued.input, output_id,
         (unsigned long long)req->get_addr(), (uint32_t)req->get_size(),
         this->outstanding.size() + this->collective_packets.size());
+    this->trace_flow("exit", "req", req, queued.input, output_id, vp::IO_REQ_PENDING);
     vp::IoReqStatus status = this->output_itfs[output_id].req(req);
     auto outstanding = this->outstanding.find(req);
     bool completed = is_collective || outstanding == this->outstanding.end();
@@ -1243,7 +1294,7 @@ void UnifiedRouter::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
         {
             input.pending.pop_front();
             input.pending_size -= req->get_size();
-            _this->grant_waiting_input(input);
+            _this->grant_waiting_input(input, input_id);
             _this->trace.msg(vp::Trace::LEVEL_TRACE,
                 "router=%d route_invalid input=%d addr=0x%llx size=%u\n",
                 _this->router_id, input_id, (unsigned long long)req->get_addr(),
@@ -1254,7 +1305,7 @@ void UnifiedRouter::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
 
         input.pending.pop_front();
         input.pending_size -= req->get_size();
-        _this->grant_waiting_input(input);
+        _this->grant_waiting_input(input, input_id);
         _this->outputs[output].pending.push_back({req, input_id});
     }
 
@@ -1306,6 +1357,8 @@ void UnifiedRouter::response(vp::Block *__this, vp::IoReq *req, int port)
             "router=%d collective_response port=%d addr=0x%llx size=%u\n",
             _this->router_id, port, (unsigned long long)req->get_addr(),
             (uint32_t)req->get_size());
+        _this->trace_flow("enter", "resp", req, -1, port, req->status);
+        _this->trace_flow("exit", "resp", req, -1, port, req->status);
         _this->collective_release_packet(req);
         return;
     }
@@ -1322,6 +1375,8 @@ void UnifiedRouter::response(vp::Block *__this, vp::IoReq *req, int port)
         "router=%d response port=%d addr=0x%llx size=%u outstanding=%zu\n",
         _this->router_id, port, (unsigned long long)req->get_addr(),
         (uint32_t)req->get_size(), _this->outstanding.size());
+    _this->trace_flow("enter", "resp", req, -1, port, req->status);
+    _this->trace_flow("exit", "resp", req, -1, port, req->status);
     req->get_resp_port()->resp(req);
 }
 
@@ -1331,6 +1386,7 @@ void UnifiedRouter::finish_req(vp::IoReq *req, vp::IoReqStatus status)
         "router=%d finish status=%d addr=0x%llx size=%u\n",
         this->router_id, status, (unsigned long long)req->get_addr(),
         (uint32_t)req->get_size());
+    this->trace_flow("exit", "resp", req, -1, -1, status);
     req->status = status;
     req->get_resp_port()->resp(req);
 }

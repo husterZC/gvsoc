@@ -45,6 +45,7 @@ clean_sw:
 ######################################################################
 
 run_trace_args ?= --trace-level=trace --trace=chip_.*/cluster_.*/dma/trace --trace=chip_.*/cluster_0/rdma/trace --trace=chip_.*/cluster_.*/tcdm/dma_converter/trace --trace=chip_.*/onchip_interco/.*/trace --trace=offchip_interco/.*/trace
+runv_trace_args ?= --trace-level=trace --trace=chip_.*/cluster_.*/dma/flow --trace=chip_.*/cluster_0/rdma/flow --trace=chip_.*/onchip_interco/.*/flow --trace=offchip_interco/.*/flow
 
 run:
 	./install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary $(sw_build_dir)/velocity.elf run
@@ -52,6 +53,10 @@ run:
 rund:
 	mkdir -p $(sw_build_dir)
 	bash -o pipefail -c './install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary $(sw_build_dir)/velocity.elf run $(run_trace_args) 2>&1 | tee $(sw_build_dir)/analyze_trace.txt'
+
+runv:
+	mkdir -p $(sw_build_dir)
+	bash -o pipefail -c './install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary $(sw_build_dir)/velocity.elf run $(runv_trace_args) 2>&1 | tee $(sw_build_dir)/packet_flow_trace.txt'
 
 
 ######################################################################

@@ -508,7 +508,7 @@ def run_test_cell(test_name, test, topology_name, repo_root, run_dir, timeout, s
     log_path = run_dir / 'logs' / '{}__{}.log'.format(topology_name, test_name)
     cmake = cmake_arg(test, app_path)
     target = run_target or test.get('run_target', 'run')
-    if target not in ('run', 'rund'):
+    if target not in ('run', 'rund', 'runv'):
         raise ValueError('Unsupported run target for {}: {}'.format(test_name, target))
     run_command = 'timeout {} make {} sw_build_dir={}'.format(
         int(timeout),
@@ -758,7 +758,7 @@ def main():
     parser.add_argument('--results', type=Path, default=default_dir / 'results')
     parser.add_argument('--progress', choices=['auto', 'bar', 'line', 'off'], default='auto')
     parser.add_argument('--color', choices=['auto', 'always', 'never'], default='auto')
-    parser.add_argument('--run-target', choices=['run', 'rund'], help='Override the make target used for simulator execution')
+    parser.add_argument('--run-target', choices=['run', 'rund', 'runv'], help='Override the make target used for simulator execution')
     parser.add_argument(
         '--no-sim-lock',
         action='store_true',

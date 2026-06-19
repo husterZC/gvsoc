@@ -293,8 +293,11 @@ private:
     void remove_inflight(Txn *txn);
     bool read_u32(vp::IoReq *req, uint32_t value);
     bool write_u32(vp::IoReq *req, uint32_t &reg);
+    void trace_flow(const char *event, const char *direction, vp::IoReq *req,
+        vp::IoReqStatus status);
 
     vp::Trace trace;
+    vp::Trace flow;
     vp::IoSlave regs_itf;
     vp::IoSlave remote_in_itf;
     vp::IoMaster tcdm_itf;
@@ -351,6 +354,7 @@ VelocityDma::VelocityDma(vp::ComponentConf &config)
     : vp::Component(config)
 {
     this->traces.new_trace("trace", &this->trace, vp::DEBUG);
+    this->traces.new_trace("flow", &this->flow, vp::DEBUG);
 
     this->cluster_id = this->get_js_config()->get_child_int("cluster_id");
     this->num_cluster = this->get_js_config()->get_child_int("num_cluster");
@@ -372,6 +376,31 @@ VelocityDma::VelocityDma(vp::ComponentConf &config)
     this->remote_out_itf.set_grant_meth(&VelocityDma::remote_grant);
     this->remote_out_itf.set_resp_meth(&VelocityDma::remote_resp);
     this->new_master_port("remote_out", &this->remote_out_itf);
+}
+
+void VelocityDma::trace_flow(const char *event, const char *direction, vp::IoReq *req,
+    vp::IoReqStatus status)
+{
+    velocity::PacketTraceInfo info;
+    velocity::packet_trace_decode(req, info);
+
+    char id[96];
+    char src[16];
+    char dst[16];
+    char root[16];
+    velocity::packet_trace_format_id(info, id, sizeof(id));
+    velocity::packet_trace_format_node(info.has_src, info.src_cluster, src, sizeof(src));
+    velocity::packet_trace_format_node(info.has_dst, info.dst_cluster, dst, sizeof(dst));
+    velocity::packet_trace_format_node(info.has_root, info.root_cluster, root, sizeof(root));
+
+    this->flow.msg(vp::Trace::LEVEL_TRACE,
+        "FLOW event=%s dir=%s comp=dma node=%u id=%s kind=%s src=%s dst=%s root=%s action=%s phase=%s op=%s addr=0x%llx size=%u payload=%u bytes=%u status=%s pending=%zu\n",
+        event, direction, this->cluster_id, id, velocity::packet_trace_kind_name(info.kind),
+        src, dst, root, velocity::packet_trace_action_name(info),
+        info.kind == velocity::PacketTraceInfo::KIND_DMA ? velocity::packet_phase_name(info.phase) : "none",
+        info.kind == velocity::PacketTraceInfo::KIND_COLLECTIVE ? velocity::innetwork_op_name(info.op) : "none",
+        (unsigned long long)info.addr, info.req_size, info.payload_size, info.bytes,
+        velocity::io_status_name(status), this->remote_pending.size());
 }
 
 bool VelocityDma::read_u32(vp::IoReq *req, uint32_t value)
@@ -567,6 +596,7 @@ bool VelocityDma::issue_packet(OutgoingPacket *packet)
         header->txn_id, velocity::packet_phase_name(header->phase), header->src_cluster,
         header->dst_cluster, (unsigned long long)packet->req.get_addr(), (uint32_t)packet->req.get_size());
 
+    this->trace_flow("enter", "tx", &packet->req, vp::IO_REQ_PENDING);
     vp::IoReqStatus status = this->remote_out_itf.req(&packet->req);
     this->trace.msg(vp::Trace::LEVEL_TRACE,
         "[%9u][DMA]: send_status phase=%s src=%u dst=%u status=%s full_latency=%llu\n",
@@ -628,6 +658,7 @@ void VelocityDma::complete_packet(OutgoingPacket *packet, vp::IoReqStatus status
         header->txn_id, velocity::packet_phase_name(header->phase), header->src_cluster,
         header->dst_cluster, velocity::io_status_name(status), synchronous,
         (unsigned long long)holder->req.get_full_latency());
+    this->trace_flow("exit", "tx", &holder->req, status);
 
     if (status != vp::IO_REQ_OK)
     {
@@ -1602,6 +1633,16 @@ vp::IoReqStatus VelocityDma::regs_req(vp::Block *__this, vp::IoReq *req)
 vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
 {
     VelocityDma *_this = (VelocityDma *)__this;
+    _this->trace_flow("enter", "rx", req, vp::IO_REQ_PENDING);
+
+    auto finish = [&] (vp::IoReqStatus status) -> vp::IoReqStatus
+    {
+        if (status != vp::IO_REQ_PENDING)
+        {
+            _this->trace_flow("exit", "rx", req, status);
+        }
+        return status;
+    };
 
     if (req->get_size() >= sizeof(velocity::InNetworkHeader))
     {
@@ -1609,15 +1650,15 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
         memcpy(&collective_header, req->get_data(), sizeof(collective_header));
         if (collective_header.magic == velocity::INNETWORK_MAGIC)
         {
-            return _this->handle_collective_packet(req, collective_header) ?
-                vp::IO_REQ_PENDING : vp::IO_REQ_INVALID;
+            return finish(_this->handle_collective_packet(req, collective_header) ?
+                vp::IO_REQ_PENDING : vp::IO_REQ_INVALID);
         }
     }
 
     if (req->get_size() < sizeof(RemoteHeader))
     {
         _this->last_error = DMA_ERROR_BAD_SIZE;
-        return vp::IO_REQ_INVALID;
+        return finish(vp::IO_REQ_INVALID);
     }
 
     RemoteHeader header;
@@ -1626,13 +1667,13 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
     if (header.magic != REMOTE_MAGIC || header.dst_cluster != _this->cluster_id)
     {
         _this->last_error = DMA_ERROR_BAD_DEST;
-        return vp::IO_REQ_INVALID;
+        return finish(vp::IO_REQ_INVALID);
     }
 
     if (!req->get_is_write())
     {
         _this->last_error = DMA_ERROR_REMOTE_ACCESS;
-        return vp::IO_REQ_INVALID;
+        return finish(vp::IO_REQ_INVALID);
     }
 
     _this->trace.msg(vp::Trace::LEVEL_TRACE,
@@ -1648,7 +1689,7 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
                 header.remote_offset + header.payload_size > _this->tcdm_size)
             {
                 _this->last_error = DMA_ERROR_BAD_SIZE;
-                return vp::IO_REQ_INVALID;
+                return finish(vp::IO_REQ_INVALID);
             }
 
             vp::IoReq tcdm_req(header.remote_offset, req->get_data() + sizeof(RemoteHeader),
@@ -1667,11 +1708,11 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
             if (status != vp::IO_REQ_OK)
             {
                 _this->last_error = DMA_ERROR_LOCAL_ACCESS;
-                return vp::IO_REQ_INVALID;
+                return finish(vp::IO_REQ_INVALID);
             }
 
             _this->schedule_remote_write_response(NULL, req, tcdm_req.get_full_latency());
-            return vp::IO_REQ_PENDING;
+            return finish(vp::IO_REQ_PENDING);
         }
 
         case REMOTE_PHASE_READ_REQ:
@@ -1681,7 +1722,7 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
                 header.local_offset + header.payload_size > _this->tcdm_size)
             {
                 _this->last_error = DMA_ERROR_BAD_SIZE;
-                return vp::IO_REQ_INVALID;
+                return finish(vp::IO_REQ_INVALID);
             }
 
             std::vector<uint8_t> buffer(header.payload_size);
@@ -1699,17 +1740,17 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
                 buffer.data(), false, latency))
             {
                 _this->last_error = scratch.error;
-                return vp::IO_REQ_INVALID;
+                return finish(vp::IO_REQ_INVALID);
             }
 
             if (!_this->submit_remote_read_resp(header.src_cluster, header.txn_id,
                 header.remote_offset, header.local_offset, header.payload_size, buffer.data(),
                 latency + _this->base_latency))
             {
-                return vp::IO_REQ_INVALID;
+                return finish(vp::IO_REQ_INVALID);
             }
 
-            return vp::IO_REQ_OK;
+            return finish(vp::IO_REQ_OK);
         }
 
         case REMOTE_PHASE_READ_RESP:
@@ -1718,14 +1759,14 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
                 header.remote_offset + header.payload_size > _this->tcdm_size)
             {
                 _this->last_error = DMA_ERROR_BAD_SIZE;
-                return vp::IO_REQ_INVALID;
+                return finish(vp::IO_REQ_INVALID);
             }
 
             auto it = _this->txns.find(header.txn_id);
             if (it == _this->txns.end() || it->second->type != DMA_TYPE_READ)
             {
                 _this->last_error = DMA_ERROR_REMOTE_ACCESS;
-                return vp::IO_REQ_INVALID;
+                return finish(vp::IO_REQ_INVALID);
             }
 
             Txn *txn = it->second.get();
@@ -1734,11 +1775,11 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
                 req->get_data() + sizeof(RemoteHeader), true, latency))
             {
                 _this->finish_txn(txn, DMA_STATUS_ERROR, txn->error);
-                return vp::IO_REQ_INVALID;
+                return finish(vp::IO_REQ_INVALID);
             }
 
             _this->schedule_remote_write_response(txn, req, latency);
-            return vp::IO_REQ_PENDING;
+            return finish(vp::IO_REQ_PENDING);
         }
 
         case REMOTE_PHASE_LATENCY_PROBE:
@@ -1746,7 +1787,7 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
             if (req->get_size() != sizeof(RemoteHeader) || header.payload_size != 0)
             {
                 _this->last_error = DMA_ERROR_BAD_SIZE;
-                return vp::IO_REQ_INVALID;
+                return finish(vp::IO_REQ_INVALID);
             }
 
             header.network_exit_cycle = _this->clock.get_cycles();
@@ -1756,17 +1797,18 @@ vp::IoReqStatus VelocityDma::remote_req(vp::Block *__this, vp::IoReq *req)
                 header.txn_id, velocity::packet_phase_name(header.phase), header.src_cluster,
                 header.dst_cluster, (unsigned long long)header.network_enter_cycle,
                 (unsigned long long)header.network_exit_cycle);
-            return vp::IO_REQ_OK;
+            return finish(vp::IO_REQ_OK);
         }
 
         case REMOTE_PHASE_TWO_SEND:
         {
-            return _this->handle_two_sided_send(req, header) ? vp::IO_REQ_PENDING : vp::IO_REQ_INVALID;
+            return finish(_this->handle_two_sided_send(req, header) ?
+                vp::IO_REQ_PENDING : vp::IO_REQ_INVALID);
         }
 
         default:
             _this->last_error = DMA_ERROR_REMOTE_ACCESS;
-            return vp::IO_REQ_INVALID;
+            return finish(vp::IO_REQ_INVALID);
     }
 }
 
@@ -1854,6 +1896,7 @@ void VelocityDma::remote_write_event(vp::Block *__this, vp::ClockEvent *event)
         _this->finish_txn(holder->txn, DMA_STATUS_DONE, DMA_ERROR_NONE);
     }
 
+    _this->trace_flow("exit", "rx", holder->req, vp::IO_REQ_OK);
     holder->req->status = vp::IO_REQ_OK;
     holder->req->get_resp_port()->resp(holder->req);
 }
@@ -1881,6 +1924,7 @@ void VelocityDma::two_sided_recv_event(vp::Block *__this, vp::ClockEvent *event)
     }
 
     holder->op->recv_done = true;
+    _this->trace_flow("exit", "rx", holder->remote_req, vp::IO_REQ_OK);
     holder->remote_req->status = vp::IO_REQ_OK;
     holder->remote_req->get_resp_port()->resp(holder->remote_req);
     _this->complete_two_sided_op(holder->op);

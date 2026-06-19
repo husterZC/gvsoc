@@ -6,6 +6,8 @@
 #include <vp/vp.hpp>
 #include <vp/itf/io.hpp>
 
+#include "../packet_trace.hpp"
+
 class UnifiedLink : public vp::Component
 {
 public:
@@ -28,8 +30,11 @@ private:
     void schedule(int64_t delay = 1);
     void finish_req(vp::IoReq *req, vp::IoReqStatus status);
     int64_t transfer_cycles(vp::IoReq *req);
+    void trace_flow(const char *event, const char *direction, vp::IoReq *req,
+        vp::IoReqStatus status);
 
     vp::Trace trace;
+    vp::Trace flow;
     vp::IoSlave input_itf;
     vp::IoMaster output_itf;
     vp::ClockEvent fsm_event;
@@ -49,6 +54,7 @@ UnifiedLink::UnifiedLink(vp::ComponentConf &config)
     : vp::Component(config), fsm_event(this, UnifiedLink::fsm_handler)
 {
     this->traces.new_trace("trace", &this->trace, vp::DEBUG);
+    this->traces.new_trace("flow", &this->flow, vp::DEBUG);
 
     this->latency = this->get_js_config()->get("latency")->get_int();
     this->width = this->get_js_config()->get("width")->get_int();
@@ -64,6 +70,32 @@ UnifiedLink::UnifiedLink(vp::ComponentConf &config)
     this->output_itf.set_grant_meth(&UnifiedLink::grant);
     this->output_itf.set_resp_meth(&UnifiedLink::response);
     this->new_master_port("output", &this->output_itf);
+}
+
+void UnifiedLink::trace_flow(const char *event, const char *direction, vp::IoReq *req,
+    vp::IoReqStatus status)
+{
+    velocity::PacketTraceInfo info;
+    velocity::packet_trace_decode(req, info);
+
+    char id[96];
+    char src[16];
+    char dst[16];
+    char root[16];
+    velocity::packet_trace_format_id(info, id, sizeof(id));
+    velocity::packet_trace_format_node(info.has_src, info.src_cluster, src, sizeof(src));
+    velocity::packet_trace_format_node(info.has_dst, info.dst_cluster, dst, sizeof(dst));
+    velocity::packet_trace_format_node(info.has_root, info.root_cluster, root, sizeof(root));
+
+    this->flow.msg(vp::Trace::LEVEL_TRACE,
+        "FLOW event=%s dir=%s comp=link id=%s kind=%s src=%s dst=%s root=%s action=%s phase=%s op=%s addr=0x%llx size=%u payload=%u bytes=%u status=%s pending=%lld outstanding=%zu\n",
+        event, direction, id, velocity::packet_trace_kind_name(info.kind),
+        src, dst, root, velocity::packet_trace_action_name(info),
+        info.kind == velocity::PacketTraceInfo::KIND_DMA ? velocity::packet_phase_name(info.phase) : "none",
+        info.kind == velocity::PacketTraceInfo::KIND_COLLECTIVE ? velocity::innetwork_op_name(info.op) : "none",
+        (unsigned long long)info.addr, info.req_size, info.payload_size, info.bytes,
+        velocity::io_status_name(status), (long long)this->pending_size,
+        this->outstanding.size());
 }
 
 vp::IoReqStatus UnifiedLink::req(vp::Block *__this, vp::IoReq *req)
@@ -91,6 +123,7 @@ vp::IoReqStatus UnifiedLink::handle_req(vp::IoReq *req)
         req->get_is_write(), (long long)ready_cycle, (long long)this->pending_size);
     this->pending.push_back({req, ready_cycle});
     this->pending_size += req->get_size();
+    this->trace_flow("enter", "req", req, vp::IO_REQ_PENDING);
     this->schedule();
     return vp::IO_REQ_PENDING;
 }
@@ -109,6 +142,7 @@ void UnifiedLink::grant_waiting_inputs()
         this->denied.pop_front();
         this->pending.push_back({req, this->clock.get_cycles() + this->latency});
         this->pending_size += req->get_size();
+        this->trace_flow("enter", "req", req, vp::IO_REQ_PENDING);
         req->get_resp_port()->grant(req);
     }
 }
@@ -161,6 +195,7 @@ void UnifiedLink::fsm_handler(vp::Block *__this, vp::ClockEvent *event)
         "link forward addr=0x%llx size=%u ready=%lld cycles=%lld outstanding=%zu\n",
         (unsigned long long)req->get_addr(), (uint32_t)req->get_size(),
         (long long)ready_cycle, (long long)cycles, _this->outstanding.size());
+    _this->trace_flow("exit", "req", req, vp::IO_REQ_PENDING);
     vp::IoReqStatus status = _this->output_itf.req(req);
     auto outstanding = _this->outstanding.find(req);
     bool completed = outstanding == _this->outstanding.end();
@@ -227,6 +262,8 @@ void UnifiedLink::response(vp::Block *__this, vp::IoReq *req)
         "link response addr=0x%llx size=%u outstanding=%zu\n",
         (unsigned long long)req->get_addr(), (uint32_t)req->get_size(),
         _this->outstanding.size());
+    _this->trace_flow("enter", "resp", req, req->status);
+    _this->trace_flow("exit", "resp", req, req->status);
     req->get_resp_port()->resp(req);
 }
 
@@ -235,6 +272,7 @@ void UnifiedLink::finish_req(vp::IoReq *req, vp::IoReqStatus status)
     this->trace.msg(vp::Trace::LEVEL_TRACE,
         "link finish status=%d addr=0x%llx size=%u\n",
         status, (unsigned long long)req->get_addr(), (uint32_t)req->get_size());
+    this->trace_flow("exit", "resp", req, status);
     req->status = status;
     req->get_resp_port()->resp(req);
 }

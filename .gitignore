@@ -4,6 +4,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .matplotlib/
+tmp/
 docs/developer/_build/
 build/
 /install/
