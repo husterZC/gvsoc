@@ -25,6 +25,7 @@ int main(void)
     uint32_t ids[DMA_TEST_MAX_INFLIGHT];
     uint32_t pending = 0;
     uint32_t failed = 0;
+    velocity_dma_port_t dma = flex_dma_port();
 
     for (uint32_t i = 0; i < ARCH_NUM_CLUSTER; i++)
     {
@@ -47,6 +48,7 @@ int main(void)
         }
 
         ids[pending++] = velocity_dma_write(
+            &dma,
             dst,
             DMA_TEST_SEND_OFFSET,
             DMA_TEST_RX_BASE + cid * sizeof(uint32_t),
@@ -59,8 +61,8 @@ int main(void)
         {
             for (uint32_t i = 0; i < pending; i++)
             {
-                velocity_dma_wait(ids[i]);
-                if (velocity_dma_status(ids[i]) != VELOCITY_DMA_STATUS_DONE)
+                velocity_dma_wait(&dma, ids[i]);
+                if (velocity_dma_status(&dma, ids[i]) != VELOCITY_DMA_STATUS_DONE)
                 {
                     failed = 1;
                 }
@@ -71,8 +73,8 @@ int main(void)
 
     for (uint32_t i = 0; i < pending; i++)
     {
-        velocity_dma_wait(ids[i]);
-        if (velocity_dma_status(ids[i]) != VELOCITY_DMA_STATUS_DONE)
+        velocity_dma_wait(&dma, ids[i]);
+        if (velocity_dma_status(&dma, ids[i]) != VELOCITY_DMA_STATUS_DONE)
         {
             failed = 1;
         }
@@ -112,7 +114,7 @@ int main(void)
         flex_print(" latency_ns=");
         flex_print_int(latency_ns);
         flex_print(" error=");
-        flex_print_int(velocity_dma_error());
+        flex_print_int(velocity_dma_error(&dma));
         flex_print("\n");
         flex_eoc(failed);
     }

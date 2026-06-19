@@ -16,12 +16,12 @@
 #define COLLECTIVE_TEST_STATUS_OFFSET      0xa000u
 #define COLLECTIVE_TEST_SCRATCH_OFFSET     0xb000u
 
-static uint32_t all_clusters[ARCH_NUM_CLUSTER];
-static uint32_t half_clusters[ARCH_NUM_CLUSTER];
+static uint32_t all_nodes[ARCH_NUM_CLUSTER];
+static uint32_t half_nodes[ARCH_NUM_CLUSTER];
 
 static inline volatile uint8_t *test_bytes(uint32_t offset)
 {
-    return (volatile uint8_t *)local(offset);
+    return (volatile uint8_t *)(uintptr_t)local(offset);
 }
 
 static inline uint8_t bcast_pattern(uint32_t tag, uint32_t index)
@@ -77,7 +77,8 @@ static void clear_block(uint32_t offset, uint32_t bytes)
 
 static uint32_t report_group_status(const collective_tree_group_t *group, uint32_t failed)
 {
-    volatile uint32_t *status = (volatile uint32_t *)local(COLLECTIVE_TEST_STATUS_OFFSET);
+    volatile uint32_t *status =
+        (volatile uint32_t *)(uintptr_t)local(COLLECTIVE_TEST_STATUS_OFFSET);
 
     if (!collective_tree_group_active(group))
     {
@@ -92,7 +93,8 @@ static uint32_t report_group_status(const collective_tree_group_t *group, uint32
         {
             *status = 0;
             total_failed |= velocity_dma_recv(
-                group->clusters[rank], COLLECTIVE_TEST_STATUS_OFFSET, sizeof(uint32_t));
+                &group->port, group->nodes[rank],
+                COLLECTIVE_TEST_STATUS_OFFSET, sizeof(uint32_t));
             total_failed |= *status;
         }
 
@@ -100,7 +102,8 @@ static uint32_t report_group_status(const collective_tree_group_t *group, uint32
     }
 
     *status = failed;
-    velocity_dma_send(group->clusters[0], COLLECTIVE_TEST_STATUS_OFFSET, sizeof(uint32_t));
+    velocity_dma_send(
+        &group->port, group->nodes[0], COLLECTIVE_TEST_STATUS_OFFSET, sizeof(uint32_t));
     return failed;
 }
 
@@ -327,20 +330,20 @@ static uint32_t cap_group_size(uint32_t requested, uint32_t cap)
     return size;
 }
 
-static uint32_t make_all_group(uint32_t *clusters)
+static uint32_t make_all_group(uint32_t *nodes)
 {
     uint32_t size = cap_group_size(
         ARCH_NUM_CLUSTER, SOFTWARE_COLLECTIVE_TREE_TEST_MAX_ALL_GROUP);
 
     for (uint32_t rank = 0; rank < size; rank++)
     {
-        clusters[rank] = rank;
+        nodes[rank] = rank;
     }
 
     return size;
 }
 
-static uint32_t make_half_group(uint32_t *clusters)
+static uint32_t make_half_group(uint32_t *nodes)
 {
     uint32_t size = cap_group_size(
         ARCH_NUM_CLUSTER / 2u, SOFTWARE_COLLECTIVE_TREE_TEST_MAX_SUBSET_GROUP);
@@ -352,7 +355,7 @@ static uint32_t make_half_group(uint32_t *clusters)
 
     for (uint32_t rank = 0; rank < size; rank++)
     {
-        clusters[rank] = ARCH_NUM_CLUSTER >= size * 2u ? rank * 2u : rank;
+        nodes[rank] = ARCH_NUM_CLUSTER >= size * 2u ? rank * 2u : rank;
     }
 
     return size;
@@ -398,6 +401,7 @@ int main(void)
     uint32_t half_failed;
     uint32_t all_size;
     uint32_t half_size;
+    velocity_dma_port_t dma = flex_dma_port();
     collective_tree_group_t all_group;
     collective_tree_group_t half_group;
 
@@ -411,13 +415,13 @@ int main(void)
         return 1;
     }
 
-    all_size = make_all_group(all_clusters);
-    half_size = make_half_group(half_clusters);
+    all_size = make_all_group(all_nodes);
+    half_size = make_half_group(half_nodes);
 
-    collective_tree_group_init(&all_group, all_clusters, all_size,
+    collective_tree_group_init(&all_group, &dma, all_nodes, all_size,
         COLLECTIVE_TEST_RADIX, COLLECTIVE_TEST_SCRATCH_OFFSET,
         COLLECTIVE_TEST_SCRATCH_STRIDE, COLLECTIVE_TEST_RADIX);
-    collective_tree_group_init(&half_group, half_clusters, half_size,
+    collective_tree_group_init(&half_group, &dma, half_nodes, half_size,
         COLLECTIVE_TEST_RADIX, COLLECTIVE_TEST_SCRATCH_OFFSET,
         COLLECTIVE_TEST_SCRATCH_STRIDE, COLLECTIVE_TEST_RADIX);
 

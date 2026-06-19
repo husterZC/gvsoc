@@ -115,12 +115,16 @@ static uint32_t check_rx_buffer(
     return 0;
 }
 
-static void wait_pending(uint32_t *ids, uint32_t *pending, uint32_t *failed)
+static void wait_pending(
+    const velocity_dma_port_t *dma,
+    uint32_t *ids,
+    uint32_t *pending,
+    uint32_t *failed)
 {
     for (uint32_t i = 0; i < *pending; i++)
     {
-        velocity_dma_wait(ids[i]);
-        if (velocity_dma_status(ids[i]) != VELOCITY_DMA_STATUS_DONE)
+        velocity_dma_wait(dma, ids[i]);
+        if (velocity_dma_status(dma, ids[i]) != VELOCITY_DMA_STATUS_DONE)
         {
             *failed = 1;
         }
@@ -144,6 +148,7 @@ static uint32_t wait_report(volatile uint32_t *status)
 }
 
 static void print_result(
+    const velocity_dma_port_t *dma,
     uint32_t failed,
     uint32_t dst,
     uint32_t bytes,
@@ -184,7 +189,7 @@ static void print_result(
     flex_print(" expected=");
     flex_print_int(expected);
     flex_print(" error=");
-    flex_print_int(velocity_dma_error());
+    flex_print_int(velocity_dma_error(dma));
     flex_print("\n");
 }
 
@@ -199,6 +204,7 @@ int main(void)
     uint32_t observed = 0;
     uint32_t expected = 0;
     uint32_t mismatch_index = 0;
+    velocity_dma_port_t dma = flex_dma_port();
     uint64_t footprint = (uint64_t)MAX_BANDWIDTH_TEST_TXN_SIZE * slots;
     uint32_t elapsed_ns = 0;
     uint32_t bytes = MAX_BANDWIDTH_TEST_TXN_SIZE * MAX_BANDWIDTH_TEST_REPEAT;
@@ -208,7 +214,7 @@ int main(void)
     {
         if (cid == 0)
         {
-            print_result(1, dst, 0, 0, 0, 0, 0);
+            print_result(&dma, 1, dst, 0, 0, 0, 0, 0);
             flex_eoc(1);
         }
         return 1;
@@ -242,6 +248,7 @@ int main(void)
             uint32_t offset = MAX_BW_BUFFER_BASE + slot * MAX_BANDWIDTH_TEST_TXN_SIZE;
 
             ids[pending++] = velocity_dma_write(
+                &dma,
                 dst,
                 offset,
                 offset,
@@ -250,11 +257,11 @@ int main(void)
 
             if (pending == MAX_BANDWIDTH_TEST_MAX_INFLIGHT)
             {
-                wait_pending(ids, &pending, &failed);
+                wait_pending(&dma, ids, &pending, &failed);
             }
         }
 
-        wait_pending(ids, &pending, &failed);
+        wait_pending(&dma, ids, &pending, &failed);
         elapsed_ns = div_u64_u32(flex_timer_elapsed_ps(), 1000u);
     }
 
@@ -270,12 +277,13 @@ int main(void)
         report[MAX_BW_REPORT_INDEX] = mismatch_index;
 
         uint32_t id = velocity_dma_write(
+            &dma,
             0,
             MAX_BW_FAIL_OFFSET,
             MAX_BW_STATUS_OFFSET,
             MAX_BW_REPORT_WORDS * sizeof(uint32_t),
             0);
-        velocity_dma_wait(id);
+        velocity_dma_wait(&dma, id);
     }
 
     flex_barrier_all();
@@ -288,7 +296,7 @@ int main(void)
         observed = status[MAX_BW_REPORT_OBSERVED];
         expected = status[MAX_BW_REPORT_EXPECTED];
         mismatch_index = status[MAX_BW_REPORT_INDEX];
-        print_result(failed, dst, bytes, elapsed_ns, observed, expected, mismatch_index);
+        print_result(&dma, failed, dst, bytes, elapsed_ns, observed, expected, mismatch_index);
         flex_eoc(failed);
     }
 

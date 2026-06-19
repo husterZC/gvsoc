@@ -52,3 +52,37 @@ run:
 rund:
 	mkdir -p $(sw_build_dir)
 	bash -o pipefail -c './install/bin/gvsoc --target=pulp.chips.velocity.velocity_target --binary $(sw_build_dir)/velocity.elf run $(run_trace_args) 2>&1 | tee $(sw_build_dir)/analyze_trace.txt'
+
+
+######################################################################
+## 				Make Targets for Velocity Regression				##
+######################################################################
+
+regression_dir := velocity/tests/regression
+regression_results_dir := $(regression_dir)/results
+REGRESSION_TIMEOUT ?= $(if $(filter command line environment environment override,$(origin TIMEOUT)),$(TIMEOUT),)
+REGRESSION_PROGRESS ?= $(if $(filter command line environment environment override,$(origin PROGRESS)),$(PROGRESS),)
+REGRESSION_COLOR ?= $(if $(filter command line environment environment override,$(origin COLOR)),$(COLOR),)
+REGRESSION_RUN_TARGET ?= $(if $(filter command line environment environment override,$(origin RUN_TARGET)),$(RUN_TARGET),)
+
+regression_smoke_jobs := $(if $(JOB),$(JOB),$(if $(JOBS),$(JOBS),0))
+regression_full_jobs := $(if $(JOB),$(JOB),$(if $(JOBS),$(JOBS),1))
+
+.PHONY: smoke full regression regression_smoke regression_full clean_results clean_regression_results
+
+smoke: regression_smoke
+
+full: regression_full
+
+regression: regression_smoke regression_full
+
+regression_smoke:
+	JOBS="$(regression_smoke_jobs)" TIMEOUT="$(REGRESSION_TIMEOUT)" PROGRESS="$(REGRESSION_PROGRESS)" COLOR="$(REGRESSION_COLOR)" $(regression_dir)/run_smoke.sh
+
+regression_full:
+	JOBS="$(regression_full_jobs)" TIMEOUT="$(REGRESSION_TIMEOUT)" RUN_TARGET="$(REGRESSION_RUN_TARGET)" PROGRESS="$(REGRESSION_PROGRESS)" COLOR="$(REGRESSION_COLOR)" $(regression_dir)/run_full.sh
+
+clean_results: clean_regression_results
+
+clean_regression_results:
+	rm -rf $(regression_results_dir)

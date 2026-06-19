@@ -1,12 +1,13 @@
 #ifndef EXAMPLE_COLLETIVE_INNETWORK_H
 #define EXAMPLE_COLLETIVE_INNETWORK_H
 
+#include "velocity_runtime.h"
 #include "collective_innetwork.h"
 
 /*
  * Baby examples for in-router collectives.
  *
- * Each example uses cluster 0 as the root. Clusters that are not part of a
+ * Each example uses node 0 as the root. Nodes that are not part of a
  * partial group only join the global barriers, while active group members call
  * the collective API.
  */
@@ -24,7 +25,7 @@
 
 static inline volatile uint8_t *example_innetwork_bytes(uint32_t offset)
 {
-    return (volatile uint8_t *)local(offset);
+    return (volatile uint8_t *)(uintptr_t)local(offset);
 }
 
 static inline uint32_t example_innetwork_min(uint32_t a, uint32_t b)
@@ -96,30 +97,31 @@ static inline uint8_t example_innetwork_reduce_expected(
 
 /*
  * Run four root-based examples on one logical group:
- *   1. cluster 0 broadcasts one buffer to the group
- *   2. cluster 0 receives the int8 sum of one buffer from every group member
- *   3. cluster 0 scatters one slice to each group member
- *   4. cluster 0 gathers one slice from each group member
+ *   1. node 0 broadcasts one buffer to the group
+ *   2. node 0 receives the int8 sum of one buffer from every group member
+ *   3. node 0 scatters one slice to each group member
+ *   4. node 0 gathers one slice from each group member
  */
 static inline uint32_t example_innetwork_run_group(
+    const velocity_dma_port_t *dma,
     const velocity_innetwork_group_t *group,
     uint32_t seq_base,
     uint32_t tag)
 {
     uint32_t cid = flex_get_core_id();
-    uint32_t count = collective_innetwork_group_count(group);
-    int32_t rank_signed = collective_innetwork_group_rank(group, cid);
+    uint32_t count = collective_innetwork_group_count(dma, group);
+    int32_t rank_signed = collective_innetwork_group_rank(dma, group, cid);
     uint32_t active = rank_signed >= 0;
     uint32_t rank = (uint32_t)rank_signed;
     uint32_t failed = 0;
 
-    if (count == 0 || collective_innetwork_group_member(group, 0) != 0)
+    if (count == 0 || collective_innetwork_group_member(dma, group, 0) != 0)
     {
         return 1;
     }
 
     /*
-     * Broadcast: cluster 0 provides the bytes, and all group members receive
+     * Broadcast: node 0 provides the bytes, and all group members receive
      * the same bytes at EXAMPLE_INNETWORK_BCAST_OFFSET.
      */
     if (active)
@@ -135,7 +137,7 @@ static inline uint32_t example_innetwork_run_group(
     if (active)
     {
         failed |= collective_innetwork_broadcast(
-            group, 0, EXAMPLE_INNETWORK_BCAST_OFFSET, EXAMPLE_INNETWORK_BYTES, seq_base);
+            dma, group, 0, EXAMPLE_INNETWORK_BCAST_OFFSET, EXAMPLE_INNETWORK_BYTES, seq_base);
     }
     flex_barrier_all();
     if (active)
@@ -146,7 +148,7 @@ static inline uint32_t example_innetwork_run_group(
 
     /*
      * Reduction: every group member contributes one int8 buffer. The router
-     * sums bytes in-network and writes the final result only at cluster 0.
+     * sums bytes in-network and writes the final result only at node 0.
      */
     if (active)
     {
@@ -163,7 +165,7 @@ static inline uint32_t example_innetwork_run_group(
     if (active)
     {
         failed |= collective_innetwork_reduce_int8_sum(
-            group, 0, EXAMPLE_INNETWORK_REDUCE_SEND, EXAMPLE_INNETWORK_REDUCE_RECV,
+            dma, group, 0, EXAMPLE_INNETWORK_REDUCE_SEND, EXAMPLE_INNETWORK_REDUCE_RECV,
             EXAMPLE_INNETWORK_BYTES, seq_base + 1u);
     }
     flex_barrier_all();
@@ -182,7 +184,7 @@ static inline uint32_t example_innetwork_run_group(
     flex_barrier_all();
 
     /*
-     * Scatter: cluster 0 stores count slices back-to-back. The in-router engine
+     * Scatter: node 0 stores count slices back-to-back. The in-router engine
      * sends slice rank N to group member rank N.
      */
     if (active)
@@ -206,7 +208,7 @@ static inline uint32_t example_innetwork_run_group(
     if (active)
     {
         failed |= collective_innetwork_scatter(
-            group, 0, EXAMPLE_INNETWORK_SCATTER_SEND, EXAMPLE_INNETWORK_SCATTER_RECV,
+            dma, group, 0, EXAMPLE_INNETWORK_SCATTER_SEND, EXAMPLE_INNETWORK_SCATTER_RECV,
             EXAMPLE_INNETWORK_BYTES, seq_base + 2u);
     }
     flex_barrier_all();
@@ -218,7 +220,7 @@ static inline uint32_t example_innetwork_run_group(
     flex_barrier_all();
 
     /*
-     * Gather: every group member sends one slice. Cluster 0 receives all slices
+     * Gather: every group member sends one slice. Node 0 receives all slices
      * in dense group-rank order.
      */
     if (active)
@@ -238,7 +240,7 @@ static inline uint32_t example_innetwork_run_group(
     if (active)
     {
         failed |= collective_innetwork_gather(
-            group, 0, EXAMPLE_INNETWORK_GATHER_SEND, EXAMPLE_INNETWORK_GATHER_RECV,
+            dma, group, 0, EXAMPLE_INNETWORK_GATHER_SEND, EXAMPLE_INNETWORK_GATHER_RECV,
             EXAMPLE_INNETWORK_BYTES, seq_base + 3u);
     }
     flex_barrier_all();
@@ -268,50 +270,51 @@ static inline uint32_t example_innetwork_run(void)
     uint32_t cid = flex_get_core_id();
     uint32_t failed = 0;
     uint32_t small_count = example_innetwork_min(ARCH_NUM_CLUSTER, 4u);
+    velocity_dma_port_t dma = flex_dma_port();
     velocity_innetwork_group_t group;
 
     /*
-     * ALL: every cluster participates. Cluster 0 is rank 0 and the root.
+     * ALL: every node participates. Node 0 is rank 0 and the root.
      */
     collective_innetwork_group_init_all(&group);
-    failed |= example_innetwork_run_group(&group, 10u, 1u);
+    failed |= example_innetwork_run_group(&dma, &group, 10u, 1u);
 
     /*
-     * CONTIGUOUS_RANGE: clusters [0, small_count) participate.
+     * CONTIGUOUS_RANGE: nodes [0, small_count) participate.
      */
     collective_innetwork_group_init_contiguous_range(&group, 0, small_count);
-    failed |= example_innetwork_run_group(&group, 20u, 2u);
+    failed |= example_innetwork_run_group(&dma, &group, 20u, 2u);
 
     /*
-     * POWER2_ALIGNED_RANGE: clusters [0, 2^log2_size) participate.
+     * POWER2_ALIGNED_RANGE: nodes [0, 2^log2_size) participate.
      */
     collective_innetwork_group_init_power2_aligned_range(
         &group, 0, example_innetwork_floor_log2(small_count));
-    failed |= example_innetwork_run_group(&group, 30u, 3u);
+    failed |= example_innetwork_run_group(&dma, &group, 30u, 3u);
 
     /*
-     * STRIDE_CLUSTERS: every other cluster, starting at cluster 0.
+     * STRIDE: every other node, starting at node 0.
      */
-    collective_innetwork_group_init_stride_clusters(
+    collective_innetwork_group_init_stride_nodes(
         &group, 0, example_innetwork_min((ARCH_NUM_CLUSTER + 1u) / 2u, 4u), 2u);
-    failed |= example_innetwork_run_group(&group, 40u, 4u);
+    failed |= example_innetwork_run_group(&dma, &group, 40u, 4u);
 
     /*
-     * NESTED_STRIDE_CLUSTERS: two short inner groups separated by an outer
-     * stride. On small systems, the descriptor naturally clips to live clusters.
+     * NESTED_STRIDE: two short inner groups separated by an outer stride.
+     * On small systems, the descriptor naturally clips to live nodes.
      */
-    collective_innetwork_group_init_nested_stride_clusters(
+    collective_innetwork_group_init_nested_stride_nodes(
         &group,
         0,
         ARCH_NUM_CLUSTER > 1u ? 2u : 1u,
         1u,
         ARCH_NUM_CLUSTER > 2u ? 2u : 1u,
         ARCH_NUM_CLUSTER > 4u ? 4u : 2u);
-    failed |= example_innetwork_run_group(&group, 50u, 5u);
+    failed |= example_innetwork_run_group(&dma, &group, 50u, 5u);
 
     /*
-     * Final status reduction over all clusters. This lets cluster 0 report a
-     * single pass/fail result even if a non-root cluster detected an error.
+     * Final status reduction over all nodes. This lets node 0 report a
+     * single pass/fail result even if a non-root node detected an error.
      */
     collective_innetwork_group_init_all(&group);
     example_innetwork_bytes(EXAMPLE_INNETWORK_STATUS_SEND)[0] = failed ? 1u : 0u;
@@ -321,7 +324,7 @@ static inline uint32_t example_innetwork_run(void)
     }
     flex_barrier_all();
     failed |= collective_innetwork_reduce_int8_sum(
-        &group, 0, EXAMPLE_INNETWORK_STATUS_SEND, EXAMPLE_INNETWORK_STATUS_RECV, 1u, 60u);
+        &dma, &group, 0, EXAMPLE_INNETWORK_STATUS_SEND, EXAMPLE_INNETWORK_STATUS_RECV, 1u, 60u);
     flex_barrier_all();
 
     if (cid == 0)

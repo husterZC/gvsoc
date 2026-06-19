@@ -25,7 +25,7 @@
 
 static inline volatile uint32_t *velocity_ctrl_reg(uint32_t offset)
 {
-    return (volatile uint32_t *)(ARCH_SOC_REGISTER_EOC + offset);
+    return (volatile uint32_t *)(uintptr_t)(ARCH_SOC_REGISTER_EOC + offset);
 }
 
 static inline uint64_t velocity_ctrl_read64(uint32_t lo_offset, uint32_t hi_offset)
@@ -60,6 +60,24 @@ uint32_t flex_chip_id(){
 
 uint32_t flex_num_chip(){
     return *velocity_ctrl_reg(VELOCITY_CTRL_REG_NUM_CHIP);
+}
+
+static inline velocity_dma_port_t flex_dma_port(void)
+{
+    return velocity_dma_make_port(
+        ARCH_DMA_REG_OFFSET,
+        ARCH_NUM_CLUSTER,
+        flex_get_core_id(),
+        ARCH_DMA_CLUSTER_STRIDE);
+}
+
+static inline velocity_dma_port_t flex_rdma_port(void)
+{
+    return velocity_dma_make_port(
+        ARCH_RDMA_REG_OFFSET,
+        ARCH_NUM_CHIP,
+        flex_chip_id(),
+        ARCH_RDMA_CHIP_STRIDE);
 }
 
 /*******************

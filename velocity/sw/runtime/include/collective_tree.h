@@ -14,7 +14,8 @@
 
 typedef struct
 {
-    const uint32_t *clusters;
+    velocity_dma_port_t port;
+    const uint32_t *nodes;
     uint32_t size;
     uint32_t rank;
     uint32_t radix;
@@ -35,16 +36,16 @@ static inline uint32_t collective_tree_required_scratch_bytes(uint32_t radix, ui
 
 static inline void collective_tree_group_init(
     collective_tree_group_t *group,
-    const uint32_t *clusters,
+    const velocity_dma_port_t *port,
+    const uint32_t *nodes,
     uint32_t size,
     uint32_t radix,
     uint32_t scratch_offset,
     uint32_t scratch_stride,
     uint32_t scratch_slots)
 {
-    uint32_t cid = flex_get_core_id();
-
-    group->clusters = clusters;
+    group->port = *port;
+    group->nodes = nodes;
     group->size = size;
     group->rank = COLLECTIVE_TREE_RANK_INVALID;
     group->radix = radix;
@@ -54,7 +55,7 @@ static inline void collective_tree_group_init(
 
     for (uint32_t rank = 0; rank < size; rank++)
     {
-        if (clusters[rank] == cid)
+        if (nodes[rank] == port->self_node)
         {
             group->rank = rank;
             break;
@@ -69,7 +70,7 @@ static inline uint32_t collective_tree_group_active(const collective_tree_group_
 
 static inline uint32_t collective_tree_valid_group(const collective_tree_group_t *group)
 {
-    if (group->clusters == 0 || group->size == 0 || group->radix == 0)
+    if (group->nodes == 0 || group->size == 0 || group->radix == 0)
     {
         return 0;
     }
@@ -108,12 +109,12 @@ static inline uint32_t collective_tree_group_rank_for_tree_rank(
     return rank;
 }
 
-static inline uint32_t collective_tree_cluster_for_tree_rank(
+static inline uint32_t collective_tree_node_for_tree_rank(
     const collective_tree_group_t *group,
     uint32_t root_rank,
     uint32_t tree_rank)
 {
-    return group->clusters[collective_tree_group_rank_for_tree_rank(group, root_rank, tree_rank)];
+    return group->nodes[collective_tree_group_rank_for_tree_rank(group, root_rank, tree_rank)];
 }
 
 static inline uint32_t collective_tree_parent_tree_rank(uint32_t tree_rank, uint32_t radix)
@@ -195,8 +196,8 @@ static inline uint32_t collective_tree_scratch_ready(
 
 static inline void collective_tree_copy(uint32_t dst_offset, uint32_t src_offset, uint32_t bytes)
 {
-    volatile uint8_t *dst = (volatile uint8_t *)local(dst_offset);
-    volatile uint8_t *src = (volatile uint8_t *)local(src_offset);
+    volatile uint8_t *dst = (volatile uint8_t *)(uintptr_t)local(dst_offset);
+    volatile uint8_t *src = (volatile uint8_t *)(uintptr_t)local(src_offset);
 
     for (uint32_t i = 0; i < bytes; i++)
     {
@@ -204,7 +205,11 @@ static inline void collective_tree_copy(uint32_t dst_offset, uint32_t src_offset
     }
 }
 
-static inline uint32_t collective_tree_send(uint32_t cluster, uint32_t offset, uint32_t bytes)
+static inline uint32_t collective_tree_send(
+    const collective_tree_group_t *group,
+    uint32_t node,
+    uint32_t offset,
+    uint32_t bytes)
 {
     uint32_t err;
 
@@ -213,11 +218,15 @@ static inline uint32_t collective_tree_send(uint32_t cluster, uint32_t offset, u
         return COLLECTIVE_TREE_OK;
     }
 
-    err = velocity_dma_send(cluster, offset, bytes);
+    err = velocity_dma_send(&group->port, node, offset, bytes);
     return err == 0 ? COLLECTIVE_TREE_OK : (COLLECTIVE_TREE_ERROR_DMA | err);
 }
 
-static inline uint32_t collective_tree_recv(uint32_t cluster, uint32_t offset, uint32_t bytes)
+static inline uint32_t collective_tree_recv(
+    const collective_tree_group_t *group,
+    uint32_t node,
+    uint32_t offset,
+    uint32_t bytes)
 {
     uint32_t err;
 
@@ -226,12 +235,13 @@ static inline uint32_t collective_tree_recv(uint32_t cluster, uint32_t offset, u
         return COLLECTIVE_TREE_OK;
     }
 
-    err = velocity_dma_recv(cluster, offset, bytes);
+    err = velocity_dma_recv(&group->port, node, offset, bytes);
     return err == 0 ? COLLECTIVE_TREE_OK : (COLLECTIVE_TREE_ERROR_DMA | err);
 }
 
 static inline uint32_t collective_tree_sendrecv(
-    uint32_t cluster,
+    const collective_tree_group_t *group,
+    uint32_t node,
     uint32_t send_offset,
     uint32_t recv_offset,
     uint32_t bytes)
@@ -243,7 +253,7 @@ static inline uint32_t collective_tree_sendrecv(
         return COLLECTIVE_TREE_OK;
     }
 
-    err = velocity_dma_sendrecv(cluster, send_offset, recv_offset, bytes);
+    err = velocity_dma_sendrecv(&group->port, node, send_offset, recv_offset, bytes);
     return err == 0 ? COLLECTIVE_TREE_OK : (COLLECTIVE_TREE_ERROR_DMA | err);
 }
 
@@ -286,8 +296,8 @@ static inline uint32_t collective_tree_broadcast(
     if (tree_rank != 0)
     {
         uint32_t parent_tree = collective_tree_parent_tree_rank(tree_rank, group->radix);
-        uint32_t parent = collective_tree_cluster_for_tree_rank(group, root_rank, parent_tree);
-        uint32_t status = collective_tree_recv(parent, buffer_offset, bytes);
+        uint32_t parent = collective_tree_node_for_tree_rank(group, root_rank, parent_tree);
+        uint32_t status = collective_tree_recv(group, parent, buffer_offset, bytes);
         if (status != COLLECTIVE_TREE_OK)
         {
             return status;
@@ -298,8 +308,8 @@ static inline uint32_t collective_tree_broadcast(
     for (uint32_t i = 0; i < child_count; i++)
     {
         uint32_t child_tree = tree_rank * group->radix + 1u + i;
-        uint32_t child = collective_tree_cluster_for_tree_rank(group, root_rank, child_tree);
-        uint32_t status = collective_tree_send(child, buffer_offset, bytes);
+        uint32_t child = collective_tree_node_for_tree_rank(group, root_rank, child_tree);
+        uint32_t status = collective_tree_send(group, child, buffer_offset, bytes);
         if (status != COLLECTIVE_TREE_OK)
         {
             return status;
@@ -341,9 +351,9 @@ static inline uint32_t collective_tree_reduce_int8_sum(
     for (uint32_t i = 0; i < child_count; i++)
     {
         uint32_t child_tree = tree_rank * group->radix + 1u + i;
-        uint32_t child = collective_tree_cluster_for_tree_rank(group, root_rank, child_tree);
+        uint32_t child = collective_tree_node_for_tree_rank(group, root_rank, child_tree);
         uint32_t scratch = collective_tree_scratch_offset(group, i);
-        uint32_t status = collective_tree_recv(child, scratch, bytes);
+        uint32_t status = collective_tree_recv(group, child, scratch, bytes);
         if (status != COLLECTIVE_TREE_OK)
         {
             return status;
@@ -355,8 +365,8 @@ static inline uint32_t collective_tree_reduce_int8_sum(
     if (tree_rank != 0)
     {
         uint32_t parent_tree = collective_tree_parent_tree_rank(tree_rank, group->radix);
-        uint32_t parent = collective_tree_cluster_for_tree_rank(group, root_rank, parent_tree);
-        return collective_tree_send(parent, buffer_offset, bytes);
+        uint32_t parent = collective_tree_node_for_tree_rank(group, root_rank, parent_tree);
+        return collective_tree_send(group, parent, buffer_offset, bytes);
     }
 
     return COLLECTIVE_TREE_OK;
@@ -395,7 +405,7 @@ static inline uint32_t collective_tree_scatter(
     if (tree_rank != 0)
     {
         uint32_t parent_tree = collective_tree_parent_tree_rank(tree_rank, group->radix);
-        parent = collective_tree_cluster_for_tree_rank(group, root_rank, parent_tree);
+        parent = collective_tree_node_for_tree_rank(group, root_rank, parent_tree);
     }
 
     for (uint32_t target_tree = 0; target_tree < group->size; target_tree++)
@@ -410,7 +420,7 @@ static inline uint32_t collective_tree_scatter(
             }
             else
             {
-                uint32_t status = collective_tree_recv(parent, recv_offset, bytes);
+                uint32_t status = collective_tree_recv(group, parent, recv_offset, bytes);
                 if (status != COLLECTIVE_TREE_OK)
                 {
                     return status;
@@ -421,7 +431,7 @@ static inline uint32_t collective_tree_scatter(
         {
             uint32_t child_tree = collective_tree_next_child_on_path(
                 tree_rank, target_tree, group->radix);
-            uint32_t child = collective_tree_cluster_for_tree_rank(group, root_rank, child_tree);
+            uint32_t child = collective_tree_node_for_tree_rank(group, root_rank, child_tree);
             uint32_t source_offset = scratch;
             uint32_t status;
 
@@ -433,14 +443,14 @@ static inline uint32_t collective_tree_scatter(
             }
             else
             {
-                status = collective_tree_recv(parent, scratch, bytes);
+                status = collective_tree_recv(group, parent, scratch, bytes);
                 if (status != COLLECTIVE_TREE_OK)
                 {
                     return status;
                 }
             }
 
-            status = collective_tree_send(child, source_offset, bytes);
+            status = collective_tree_send(group, child, source_offset, bytes);
             if (status != COLLECTIVE_TREE_OK)
             {
                 return status;
@@ -484,7 +494,7 @@ static inline uint32_t collective_tree_gather(
     if (tree_rank != 0)
     {
         uint32_t parent_tree = collective_tree_parent_tree_rank(tree_rank, group->radix);
-        parent = collective_tree_cluster_for_tree_rank(group, root_rank, parent_tree);
+        parent = collective_tree_node_for_tree_rank(group, root_rank, parent_tree);
     }
 
     for (uint32_t source_tree = 0; source_tree < group->size; source_tree++)
@@ -500,7 +510,7 @@ static inline uint32_t collective_tree_gather(
             }
             else
             {
-                uint32_t status = collective_tree_send(parent, send_offset, bytes);
+                uint32_t status = collective_tree_send(group, parent, send_offset, bytes);
                 if (status != COLLECTIVE_TREE_OK)
                 {
                     return status;
@@ -511,7 +521,7 @@ static inline uint32_t collective_tree_gather(
         {
             uint32_t child_tree = collective_tree_next_child_on_path(
                 tree_rank, source_tree, group->radix);
-            uint32_t child = collective_tree_cluster_for_tree_rank(group, root_rank, child_tree);
+            uint32_t child = collective_tree_node_for_tree_rank(group, root_rank, child_tree);
             uint32_t destination_offset = scratch;
             uint32_t status;
 
@@ -520,7 +530,7 @@ static inline uint32_t collective_tree_gather(
                 destination_offset = recv_offset + source_rank * bytes;
             }
 
-            status = collective_tree_recv(child, destination_offset, bytes);
+            status = collective_tree_recv(group, child, destination_offset, bytes);
             if (status != COLLECTIVE_TREE_OK)
             {
                 return status;
@@ -528,7 +538,7 @@ static inline uint32_t collective_tree_gather(
 
             if (tree_rank != 0)
             {
-                status = collective_tree_send(parent, scratch, bytes);
+                status = collective_tree_send(group, parent, scratch, bytes);
                 if (status != COLLECTIVE_TREE_OK)
                 {
                     return status;
@@ -574,9 +584,9 @@ static inline uint32_t collective_tree_all_to_all(
 
             if (group->rank == left)
             {
-                uint32_t peer = group->clusters[right];
+                uint32_t peer = group->nodes[right];
                 uint32_t status = collective_tree_sendrecv(
-                    peer, send_offset + right * bytes, recv_offset + right * bytes, bytes);
+                    group, peer, send_offset + right * bytes, recv_offset + right * bytes, bytes);
                 if (status != COLLECTIVE_TREE_OK)
                 {
                     return status;
@@ -584,9 +594,9 @@ static inline uint32_t collective_tree_all_to_all(
             }
             else if (group->rank == right)
             {
-                uint32_t peer = group->clusters[left];
+                uint32_t peer = group->nodes[left];
                 uint32_t status = collective_tree_sendrecv(
-                    peer, send_offset + left * bytes, recv_offset + left * bytes, bytes);
+                    group, peer, send_offset + left * bytes, recv_offset + left * bytes, bytes);
                 if (status != COLLECTIVE_TREE_OK)
                 {
                     return status;

@@ -1,3 +1,4 @@
+#include "velocity_runtime.h"
 #include "collective_innetwork.h"
 #include "hardware_collective_innetwork_test_config.h"
 
@@ -15,7 +16,7 @@
 
 static inline volatile uint8_t *bytes_at(uint32_t offset)
 {
-    return (volatile uint8_t *)local(offset);
+    return (volatile uint8_t *)(uintptr_t)local(offset);
 }
 
 static inline uint8_t pattern(uint32_t tag, uint32_t a, uint32_t b)
@@ -86,14 +87,15 @@ static uint8_t reduce_expected(uint32_t tag, uint32_t count, uint32_t byte)
 }
 
 static uint32_t run_group(
+    const velocity_dma_port_t *dma,
     const velocity_innetwork_group_t *group,
     uint32_t seq_base,
     uint32_t tag)
 {
     uint32_t cid = flex_get_core_id();
-    uint32_t count = collective_innetwork_group_count(group);
-    int32_t rank = collective_innetwork_group_rank(group, cid);
-    int32_t root_signed = collective_innetwork_group_member(group, 0);
+    uint32_t count = collective_innetwork_group_count(dma, group);
+    int32_t rank = collective_innetwork_group_rank(dma, group, cid);
+    int32_t root_signed = collective_innetwork_group_member(dma, group, 0);
     uint32_t root = (uint32_t)root_signed;
     uint32_t active = rank >= 0;
     uint32_t failed = 0;
@@ -111,7 +113,7 @@ static uint32_t run_group(
     if (active)
     {
         failed |= collective_innetwork_broadcast(
-            group, root, INNETWORK_BCAST_OFFSET, INNETWORK_BYTES, seq_base + 0u);
+            dma, group, root, INNETWORK_BCAST_OFFSET, INNETWORK_BYTES, seq_base + 0u);
     }
     flex_barrier_all();
     if (active)
@@ -134,7 +136,7 @@ static uint32_t run_group(
     if (active)
     {
         failed |= collective_innetwork_reduce_int8_sum(
-            group, root, INNETWORK_REDUCE_SEND, INNETWORK_REDUCE_RECV,
+            dma, group, root, INNETWORK_REDUCE_SEND, INNETWORK_REDUCE_RECV,
             INNETWORK_BYTES, seq_base + 1u);
     }
     flex_barrier_all();
@@ -170,7 +172,7 @@ static uint32_t run_group(
     if (active)
     {
         failed |= collective_innetwork_scatter(
-            group, root, INNETWORK_SCATTER_SEND, INNETWORK_SCATTER_RECV,
+            dma, group, root, INNETWORK_SCATTER_SEND, INNETWORK_SCATTER_RECV,
             INNETWORK_BYTES, seq_base + 2u);
     }
     flex_barrier_all();
@@ -203,7 +205,7 @@ static uint32_t run_group(
     if (active)
     {
         failed |= collective_innetwork_gather(
-            group, root, INNETWORK_GATHER_SEND, INNETWORK_GATHER_RECV,
+            dma, group, root, INNETWORK_GATHER_SEND, INNETWORK_GATHER_RECV,
             INNETWORK_BYTES, seq_base + 3u);
     }
     flex_barrier_all();
@@ -241,7 +243,7 @@ static uint32_t run_group(
     if (active)
     {
         failed |= collective_innetwork_alltoall(
-            group, INNETWORK_ALLTOALL_SEND, INNETWORK_ALLTOALL_RECV,
+            dma, group, INNETWORK_ALLTOALL_SEND, INNETWORK_ALLTOALL_RECV,
             INNETWORK_BYTES, seq_base + 4u);
     }
     flex_barrier_all();
@@ -266,13 +268,14 @@ static uint32_t run_group(
 }
 
 static uint32_t run_broadcast_group(
+    const velocity_dma_port_t *dma,
     const velocity_innetwork_group_t *group,
     uint32_t seq,
     uint32_t tag)
 {
     uint32_t cid = flex_get_core_id();
-    int32_t rank = collective_innetwork_group_rank(group, cid);
-    int32_t root_signed = collective_innetwork_group_member(group, 0);
+    int32_t rank = collective_innetwork_group_rank(dma, group, cid);
+    int32_t root_signed = collective_innetwork_group_member(dma, group, 0);
     uint32_t root = (uint32_t)root_signed;
     uint32_t active = rank >= 0;
     uint32_t failed = 0;
@@ -290,7 +293,7 @@ static uint32_t run_broadcast_group(
     if (active)
     {
         failed |= collective_innetwork_broadcast(
-            group, root, INNETWORK_BCAST_OFFSET, INNETWORK_BYTES, seq);
+            dma, group, root, INNETWORK_BCAST_OFFSET, INNETWORK_BYTES, seq);
     }
     flex_barrier_all();
     if (active)
@@ -320,6 +323,7 @@ int main(void)
     status_count = capped_group_count(status_count, 0);
     uint32_t nested_outer = stride_count;
     uint32_t nested_inner = 1u;
+    velocity_dma_port_t dma = flex_dma_port();
     velocity_innetwork_group_t group;
 
     if (exhaustive_count == ARCH_NUM_CLUSTER)
@@ -330,20 +334,20 @@ int main(void)
     {
         collective_innetwork_group_init_contiguous_range(&group, 0, exhaustive_count);
     }
-    failed |= run_group(&group, 10u, 1u);
+    failed |= run_group(&dma, &group, 10u, 1u);
 
     collective_innetwork_group_init_contiguous_range(&group, 0, small_count);
-    failed |= run_group(&group, 20u, 2u);
+    failed |= run_group(&dma, &group, 20u, 2u);
 
     collective_innetwork_group_init_power2_aligned_range(&group, 0, floor_log2_u32(power2_count));
-    failed |= run_broadcast_group(&group, 30u, 3u);
+    failed |= run_broadcast_group(&dma, &group, 30u, 3u);
 
-    collective_innetwork_group_init_stride_clusters(&group, 0, stride_count, 2);
-    failed |= run_broadcast_group(&group, 40u, 4u);
+    collective_innetwork_group_init_stride_nodes(&group, 0, stride_count, 2);
+    failed |= run_broadcast_group(&dma, &group, 40u, 4u);
 
-    collective_innetwork_group_init_nested_stride_clusters(
+    collective_innetwork_group_init_nested_stride_nodes(
         &group, 0, nested_inner, 1, nested_outer, 2);
-    failed |= run_broadcast_group(&group, 50u, 5u);
+    failed |= run_broadcast_group(&dma, &group, 50u, 5u);
 
     if (status_count == ARCH_NUM_CLUSTER)
     {
@@ -362,7 +366,7 @@ int main(void)
     }
     flex_barrier_all();
     failed |= collective_innetwork_reduce_int8_sum(
-        &group, 0, INNETWORK_STATUS_OFFSET, INNETWORK_STATUS_OFFSET + 4u, 1u, 60u);
+        &dma, &group, 0, INNETWORK_STATUS_OFFSET, INNETWORK_STATUS_OFFSET + 4u, 1u, 60u);
     flex_barrier_all();
     if (cid == 0)
     {

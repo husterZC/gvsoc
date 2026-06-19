@@ -1,8 +1,13 @@
 #include "velocity_runtime.h"
 
-static uint32_t latency_failed(uint32_t dst, uint64_t enter, uint64_t exit, uint64_t latency)
+static uint32_t latency_failed(
+    const velocity_dma_port_t *dma,
+    uint32_t dst,
+    uint64_t enter,
+    uint64_t exit,
+    uint64_t latency)
 {
-    if (velocity_dma_probe_dst() != dst)
+    if (velocity_dma_probe_dst(dma) != dst)
     {
         return 1;
     }
@@ -30,18 +35,19 @@ int main(void)
     }
 
     uint32_t failed = 0;
+    velocity_dma_port_t dma = flex_dma_port();
 
     for (uint32_t dst = 1; dst < ARCH_NUM_CLUSTER; dst++)
     {
-        uint32_t id = velocity_dma_probe(dst, 0);
-        velocity_dma_wait(id);
+        uint32_t id = velocity_dma_probe(&dma, dst, 0);
+        velocity_dma_wait(&dma, id);
 
-        uint32_t status = velocity_dma_status(id);
-        uint64_t enter = velocity_dma_probe_enter_cycle();
-        uint64_t exit = velocity_dma_probe_exit_cycle();
-        uint64_t latency = velocity_dma_probe_latency_cycle();
+        uint32_t status = velocity_dma_status(&dma, id);
+        uint64_t enter = velocity_dma_probe_enter_cycle(&dma);
+        uint64_t exit = velocity_dma_probe_exit_cycle(&dma);
+        uint64_t latency = velocity_dma_probe_latency_cycle(&dma);
         uint32_t row_failed = status != VELOCITY_DMA_STATUS_DONE ||
-            latency_failed(dst, enter, exit, latency);
+            latency_failed(&dma, dst, enter, exit, latency);
 
         failed |= row_failed;
 
