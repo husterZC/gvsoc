@@ -1,10 +1,10 @@
 [submodule "core"]
 	path = core
-	url = https://github.com/husterZC/gvsoc-core.git
+	url = git@github.com:husterZC/gvsoc-core.git
 	branch = chi/3darch
 [submodule "pulp"]
 	path = pulp
-	url = https://github.com/husterZC/gvsoc-pulp.git
+	url = git@github.com:husterZC/gvsoc-pulp.git
 	branch = chi/3darch
 [submodule "gvtest"]
 	path = gvtest
@@ -20,7 +20,7 @@
 	url = https://github.com/gvsoc/config_tree.git
 [submodule "engine"]
 	path = engine
-	url = https://github.com/husterZC/gvsoc-engine.git
+	url = git@github.com:husterZC/gvsoc-engine.git
 	branch = chi/3darch
 [submodule "soft_hier_sdk"]
 	path = soft_hier_sdk
