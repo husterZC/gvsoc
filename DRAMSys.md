@@ -92,6 +92,13 @@ The [3D network module](pulp/pulp/3d_network/README.md) uses this shared DRAMSys
 setup with the public `network3d_hbm4` and `network3d_endpoint` targets. Its
 `DramsysEndpoint` provides an IO_v2 beat interface and selects the shared
 configuration with `dram_type`, `DRAMSYS_PATH` and `LD_LIBRARY_PATH`.
+
+Both targets default to `hbm4-emu-fast.json`, which selects `simconfig/fast.json`
+with `DatabaseRecording`, `EnableWindowing` and `SimulationProgressBar` disabled.
+It shares the HBM4 example's memory timings, controller and address mapping.
+Use `--parameter=dram_type=hbm4-emu-example.json` for the original instrumentation.
+After updating an existing checkout, run `make -B build-configs` and rebuild the
+targets to install the new configuration files.
 See the module README for the standard build and run commands.
 
 ### Migrate DRAMSys-Integration to other GVSoC branches
