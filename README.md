@@ -66,12 +66,12 @@ The following example can be launched on pulp-open:
 ./install/bin/gvsoc --target=pulp-open --binary examples/pulp-open/hello image flash run
 ~~~~~
 
-## Using the SoftHier SDK
+## Using arche3d
 
-Follow the [SoftHier SDK guide](SoftHierSDK.md) to initialize `soft_hier_sdk`,
-build and run the `soft_hier_old` chip model, configure applications, and run
-the sparse DMA and sparse attention benchmarks. The guide also covers the
-FlooNoC v2 option, reports, and trace visualization.
+Follow the [arche3d guide](pulp/pulp/chips/arche3d/README.md) to initialize
+`arche3d_sdk`, build the 32 × 32 logic die with its I3D interconnect and stacked
+DRAM, and run software with the conventional `make` and `gvrun` commands.
+The SDK includes an all-to-all B16 DMA read benchmark and functional tests.
 
 ## Citing
 

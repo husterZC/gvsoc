@@ -22,7 +22,6 @@
 	path = engine
 	url = git@github.com:husterZC/gvsoc-engine.git
 	branch = chi/3darch
-[submodule "soft_hier_sdk"]
-	path = soft_hier_sdk
-	url = git@github.com:pulp-platform/softhier-sdk.git
-	branch = qs3d_dev
+[submodule "arche3d_sdk"]
+	path = arche3d_sdk
+	url = git@github.com:husterZC/arche3d_sdk.git
