@@ -69,6 +69,66 @@ Then You can freely develop your own model, instance multiple DRAM models and co
 
 **Note:** If you opened a new terminal/shell to your workplace, please do `source sourceme.sh` before building your GVSoC target, this will make sure neccesary environment parameters set properly for GVSoC+DRAMSys co-simulation.
 
+### Configuration and library paths
+
+The current Python API selects a simulation JSON with `dram_type`, for example
+`memory.dramsys.Dramsys(self, 'ddr', dram_type='hbm2-example.json')`.
+The corresponding component property is `dram-type`.
+
+- `make build-configs` copies `add_dramsyslib_patches/dramsys_configs` into
+  `core/models/memory/dramsys_configs`.
+- By default, the core model uses that source configuration directory. Set
+  `DRAMSYS_PATH` to use another directory containing a `dramsys_configs/`
+  subdirectory. For example, `DRAMSYS_PATH=/path/to/run` selects
+  `/path/to/run/dramsys_configs/<dram_type>`.
+- `libDRAMSys_Simulator.so` is found through the dynamic loader.
+  `source sourceme.sh` adds `third_party/DRAMSys` to `LD_LIBRARY_PATH`.
+- `SYSTEMC_HOME` selects the SystemC installation used by the GVSoC build.
+  Its version and C++ ABI must match the chosen DRAMSys library.
+
+### IO_v2 HBM4 network benchmark
+
+The [3D network tests](pulp/pulp/3d_network/README.md#dramsys-hbm4-endpoints)
+use these same path conventions. Their `DramsysEndpoint` handles the 512-bit
+AXI beat interface, native DRAM burst assembly and response backpressure.
+An endpoint is configured with
+`DramsysEndpoint(..., dram_type='hbm4-emu-example.json', data_width=512)`.
+
+The recorded HBM4 measurements use the **bundled**
+`add_dramsyslib_patches/libDRAMSys_Simulator.so` with **SystemC 2.3.3, C++17**.
+This binary has the older two-argument `add_dram` API. The newer source-build
+recipe uses SystemC 3.0.1 and the three-argument memspec API used by the core
+wrapper; it is not a drop-in replacement for this endpoint. Use the compatible
+pair when reproducing these measurements.
+
+For that bundled-library setup, install the bundled binary into the usual
+`third_party/DRAMSys` directory if no DRAMSys library is installed there yet,
+then run from the GVSoC root:
+
+```bash
+mkdir -p third_party/DRAMSys
+cp -n add_dramsyslib_patches/libDRAMSys_Simulator.so third_party/DRAMSys/
+source sourceme.sh
+export SYSTEMC_HOME=/path/to/systemc-2.3.3-built-with-cxx17
+export PYTHON=/path/to/python-with-gvsoc-dependencies
+bash pulp/pulp/3d_network/tests/hbm4.sh build
+bash pulp/pulp/3d_network/tests/hbm4.sh run
+```
+
+The source configuration is
+`add_dramsyslib_patches/dramsys_configs/hbm4-emu-example.json`, including its
+referenced memspec. The bundled library needs basename references and `clkMhz`;
+the HBM4 address map also needs byte addressing consistent with the memspec's
+32-bit word. `prepare_hbm4.py` makes these conversions and disables simulation
+instrumentation in a generated copy, preserving all source timing values and
+recording source/resolved hashes. The launcher sets `DRAMSYS_PATH` to
+`build/network3d_hbm4` for that copy. An explicit `DRAMSYS_PATH` selects an
+existing prepared configuration and is never overwritten by the launcher.
+
+For a different prepared simulation JSON, use `--parameter=dram_type=<file.json>`.
+`pulp/pulp/3d_network/doc/hbm4_config` is an archived measurement snapshot;
+normal builds and runs do not use it.
+
 
 ### Migrate DRAMSys-Integration to other GVSoC branches
 

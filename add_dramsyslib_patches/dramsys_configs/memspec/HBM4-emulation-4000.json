@@ -18,7 +18,7 @@
         "memoryType": "HBM2", //No HBM4 type supported in DRAMSys currently, so we use HBM2 as a placeholder
         "memtimingspec": {
             "CCDL": 4,
-            "CCDS": 2,
+            "CCDS": 4,
             "CCDR": 2,
             "CKE": 8,
             "DQSCK": 2,
