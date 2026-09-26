@@ -136,7 +136,10 @@ doc:
 
 SYSTEMC_VERSION := 3.0.1
 SYSTEMC_GIT_URL := https://github.com/accellera-official/systemc.git
-SYSTEMC_INSTALL_DIR := $(PWD)/third_party/systemc_install
+SYSTEMC_INSTALL_DIR := $(CURDIR)/third_party/systemc_install
+DRAMSYS_BUILD_DIR := add_dramsyslib_patches/build_dynlib_from_github_dramsys5
+
+.PHONY: build-systemc build-dramsys build-configs dramsys_preparation
 
 build-systemc: third_party/systemc_install/lib64/libsystemc.so
 
@@ -149,30 +152,17 @@ third_party/systemc_install/lib64/libsystemc.so:
 	$(CMAKE) -DCMAKE_CXX_STANDARD=17 -DCMAKE_INSTALL_PREFIX=$(SYSTEMC_INSTALL_DIR) -DCMAKE_INSTALL_LIBDIR=lib64 .. && \
 	make && make install
 
-build-dramsys: build-systemc third_party/DRAMSys/libDRAMSys_Simulator.so
-
-third_party/DRAMSys/libDRAMSys_Simulator.so:
+build-dramsys: build-systemc
+	# Reconfigure existing builds too, so preparation upgrades unoptimized libraries.
+	$(MAKE) -C $(DRAMSYS_BUILD_DIR) build \
+		CMAKE="$(shell command -v $(CMAKE))" CMAKE_FLAGS="$(CMAKE_FLAGS)" \
+		SYSTEMC_HOME="$(SYSTEMC_INSTALL_DIR)"
 	mkdir -p third_party/DRAMSys
-	cp add_dramsyslib_patches/libDRAMSys_Simulator.so third_party/DRAMSys/
-	echo "Check Library Functionality"
-	cd add_dramsyslib_patches/build_dynlib_from_github_dramsys5/dynamic_load/ && \
-	gcc main.c -ldl
-	@if add_dramsyslib_patches/build_dynlib_from_github_dramsys5/dynamic_load/a.out ; then \
-        echo "Test library succeeded"; \
-		rm add_dramsyslib_patches/build_dynlib_from_github_dramsys5/dynamic_load/a.out; \
-		rm DRAMSysRecordable* ; \
-    else \
-		rm add_dramsyslib_patches/build_dynlib_from_github_dramsys5/dynamic_load/a.out; \
-		rm third_party/DRAMSys/libDRAMSys_Simulator.so; \
-		echo "Test libaray failed, We need to rebuild the library, tasks around 40 min"; \
-		echo -n "Do you want to proceed? (y/n) "; \
-		read -t 30 -r user_input; \
-		if [ "$$user_input" = "n" ]; then echo "oops, I see, your time is precious, see you next time"; exit 1; fi; \
-		echo "Go Go Go!" ; \
-		cd add_dramsyslib_patches/build_dynlib_from_github_dramsys5 && make all; \
-		cp DRAMSys/build/lib/libDRAMSys_Simulator.so ../../third_party/DRAMSys/ ; \
-		make clean; \
-    fi
+	cmp -s $(DRAMSYS_BUILD_DIR)/DRAMSys/build/lib/libDRAMSys_Simulator.so \
+		third_party/DRAMSys/libDRAMSys_Simulator.so || \
+		cp $(DRAMSYS_BUILD_DIR)/DRAMSys/build/lib/libDRAMSys_Simulator.so third_party/DRAMSys/
+
+third_party/DRAMSys/libDRAMSys_Simulator.so: build-dramsys
 
 build-configs: core/models/memory/dramsys_configs
 

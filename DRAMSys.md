@@ -18,7 +18,7 @@ Ensure your system meets the following environment requirements:
 
 - GCC version 11.2.0 or higher
 - G++ version 11.2.0 or higher
-- CMake version 3.18.1 or higher
+- CMake version 3.28 or higher
 
 Once these requirements are met, proceed by using:
 
@@ -70,6 +70,12 @@ Then You can freely develop your own model, instance multiple DRAM models and co
 **Note:** If you opened a new terminal/shell to your workplace, please do `source sourceme.sh` before building your GVSoC target, this will make sure neccesary environment parameters set properly for GVSoC+DRAMSys co-simulation.
 
 ### Configuration and library paths
+
+`make dramsys_preparation` builds DRAMSys from the pinned, patched source in
+**Release** mode, using the CMake in your environment, and installs the library
+in `third_party/DRAMSys`. Run the same command to upgrade an existing
+unoptimized build. Repeated runs are incremental; no manual CMake commands or
+library copying are needed.
 
 The current Python API selects a simulation JSON with `dram_type`, for example
 `memory.dramsys.Dramsys(self, 'ddr', dram_type='hbm2-example.json')`.
