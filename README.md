@@ -71,7 +71,12 @@ The following example can be launched on pulp-open:
 Follow the [arche3d guide](pulp/pulp/chips/arche3d/README.md) to initialize
 `arche3d_sdk`, build the 32 × 32 logic die with its I3D interconnect and stacked
 DRAM, and run software with the conventional `make` and `gvrun` commands.
-The SDK includes an all-to-all B16 DMA read benchmark and functional tests.
+The SDK includes an all-to-all B16 DMA read benchmark, native X/Y-masked
+collectives, and functional tests. The
+[midpoint row collective benchmark](arche3d_sdk/apps/collective_row_sweep/README.md)
+sweeps 1–8192-byte multicast and FP8 E4M3 sum with concurrent groups of
+32, 16 or 8 clusters on the default configuration, using one bulk command
+per buffer and streaming successive beats in hardware.
 
 ## Citing
 
