@@ -1,0 +1,53 @@
+{
+  "status": "PASS",
+  "model": [
+    {
+      "mode": "sync",
+      "profiles": 336,
+      "status": "PASS"
+    },
+    {
+      "mode": "delayed",
+      "profiles": 336,
+      "status": "PASS"
+    },
+    {
+      "mode": "async",
+      "profiles": 336,
+      "status": "PASS"
+    },
+    {
+      "mode": "denied",
+      "profiles": 336,
+      "status": "PASS"
+    },
+    {
+      "mode": "error",
+      "profiles": 336,
+      "status": "PASS"
+    }
+  ],
+  "legacy_sdk": {
+    "status": "PASS",
+    "clusters": 1,
+    "transactions": 8,
+    "bytes": 32768,
+    "peak_outstanding": 4,
+    "network_cycles": 801.5,
+    "injection_cycles": 514.5,
+    "software_cycles": 0,
+    "boot_cycles": 1,
+    "total_cycles": 1899157,
+    "icache_preloaded_lines": 112,
+    "icache_refills": 0,
+    "icache_runtime_refills": 0,
+    "wall_seconds": 0.461738
+  },
+  "configuration": "PASS",
+  "casts": {
+    "status": "PASS",
+    "vectors": 467814,
+    "scope": "Every positive/negative representable midpoint, adjacent FP32 values, signed zero, subnormal boundary, NaN/Inf, and 10000 random values per format"
+  },
+  "profiles_sha256": "ee33a8a3688265e253c092677cb5f9b15edba5ddb2cc3cdffe97e44eb04330d1"
+}
