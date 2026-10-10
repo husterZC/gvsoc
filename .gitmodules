@@ -1,11 +1,11 @@
 [submodule "core"]
 	path = core
 	url = git@github.com:husterZC/gvsoc-core.git
-	branch = chi/3darch
+	branch = chi/arche3d_mxfp4
 [submodule "pulp"]
 	path = pulp
 	url = git@github.com:husterZC/gvsoc-pulp.git
-	branch = chi/3darch
+	branch = chi/arche3d_mxfp4
 [submodule "gvtest"]
 	path = gvtest
 	url =  https://github.com/gvsoc/gvtest.git
@@ -25,3 +25,4 @@
 [submodule "arche3d_sdk"]
 	path = arche3d_sdk
 	url = git@github.com:husterZC/arche3d_sdk.git
+	branch = mxfp4
